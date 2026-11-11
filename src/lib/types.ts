@@ -42,6 +42,16 @@ export function isActiveStatus(status: GenerationStatus): boolean {
   return ACTIVE.includes(status);
 }
 
+/** تسميات الحالات بالعربية (مشتركة بين الاستوديو والمحادثة) */
+export const STATUS_LABEL: Record<GenerationStatus, string> = {
+  pending: "جارٍ الإرسال",
+  waiting: "في قائمة الانتظار",
+  queuing: "في الطابور",
+  generating: "جارٍ التوليد",
+  success: "اكتمل",
+  fail: "فشل",
+};
+
 export const IMAGE_ASPECT_RATIOS = [
   "auto",
   "1:1",

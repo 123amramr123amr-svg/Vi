@@ -65,3 +65,5 @@ upload/
 scripts/
 agent-ctx/
 app.log
+# نسمح برفع ملف المثال (بدون أي أسرار)
+!.env.example

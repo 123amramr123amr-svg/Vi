@@ -5,6 +5,7 @@ import { formatDistanceToNow } from "date-fns";
 import { ar } from "date-fns/locale";
 import {
   AlertTriangle,
+  Bot,
   Clapperboard,
   Copy,
   Download,
@@ -39,10 +40,13 @@ import {
   ToggleGroup,
   ToggleGroupItem,
 } from "@/components/ui/toggle-group";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ChatPanel } from "@/components/vi/chat-panel";
 import { useToast } from "@/hooks/use-toast";
 import {
   IMAGE_ASPECT_RATIOS,
   IMAGE_RESOLUTIONS,
+  STATUS_LABEL,
   VIDEO_ASPECT_RATIOS,
   VIDEO_RESOLUTIONS,
   isActiveStatus,
@@ -53,15 +57,6 @@ import {
 
 const IMAGE_MODEL_LABEL = "gpt-image-2-6/flare-text-to-image";
 const VIDEO_MODEL_LABEL = "grok-imagine-video-1-5-preview";
-
-const STATUS_LABEL: Record<GenerationStatus, string> = {
-  pending: "جارٍ الإرسال",
-  waiting: "في قائمة الانتظار",
-  queuing: "في الطابور",
-  generating: "جارٍ التوليد",
-  success: "اكتمل",
-  fail: "فشل",
-};
 
 export function Studio() {
   const { toast } = useToast();
@@ -78,6 +73,7 @@ export function Studio() {
   const [history, setHistory] = useState<Generation[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(true);
   const [elapsed, setElapsed] = useState(0);
+  const [tab, setTab] = useState("studio");
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startedAtRef = useRef<number>(Date.now());
@@ -235,6 +231,16 @@ export function Studio() {
     }
   }
 
+  function openResultFromChat(item: Generation) {
+    setCurrent(item);
+    setTab("studio");
+    if (isActiveStatus(item.status)) {
+      startPolling(item.id);
+    } else {
+      stopPolling();
+    }
+  }
+
   async function deleteItem(id: string) {
     setHistory((prev) => prev.filter((x) => x.id !== id));
     if (currentId === id) setCurrent(null);
@@ -284,6 +290,18 @@ export function Studio() {
       </header>
 
       <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 lg:py-10">
+        <Tabs value={tab} onValueChange={(v) => setTab(v)}>
+          <TabsList className="mx-auto mb-6 grid w-full max-w-md grid-cols-2">
+            <TabsTrigger value="studio" className="gap-1.5">
+              <ImageIcon className="h-4 w-4" />
+              الاستوديو
+            </TabsTrigger>
+            <TabsTrigger value="chat" className="gap-1.5">
+              <Bot className="h-4 w-4" />
+              شات جي بي تي
+            </TabsTrigger>
+          </TabsList>
+          <TabsContent value="studio" className="mt-0">
         <div className="grid items-start gap-6 lg:grid-cols-[400px_minmax(0,1fr)]">
           {/* لوحة الإنشاء */}
           <Card className="border-border/70 shadow-xl shadow-black/10 lg:sticky lg:top-24">
@@ -510,6 +528,11 @@ export function Studio() {
             </section>
           </div>
         </div>
+          </TabsContent>
+          <TabsContent value="chat" className="mt-0">
+            <ChatPanel onOpenResult={openResultFromChat} />
+          </TabsContent>
+        </Tabs>
       </main>
 
       <footer className="mt-auto border-t border-border/60 py-6">

@@ -40,6 +40,17 @@ export function ensureSchema(): Promise<void> {
       await turso.execute(
         "CREATE INDEX IF NOT EXISTS idx_generations_created_at ON generations (created_at DESC)"
       );
+      await turso.execute(`
+        CREATE TABLE IF NOT EXISTS chat_messages (
+          id TEXT PRIMARY KEY,
+          role TEXT NOT NULL,
+          content TEXT NOT NULL,
+          created_at INTEGER NOT NULL
+        )
+      `);
+      await turso.execute(
+        "CREATE INDEX IF NOT EXISTS idx_chat_messages_created_at ON chat_messages (created_at DESC)"
+      );
     })().catch((err) => {
       schemaPromise = null;
       throw err;
@@ -158,4 +169,43 @@ export async function deleteGeneration(id: string): Promise<void> {
     sql: "DELETE FROM generations WHERE id = ?",
     args: [id],
   });
+}
+
+/* ---------- رسائل المحادثة (شات جي بي تي) ---------- */
+
+export interface ChatRow {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  createdAt: number;
+}
+
+export async function insertChatMessage(
+  role: "user" | "assistant",
+  content: string
+): Promise<void> {
+  await turso.execute({
+    sql: "INSERT INTO chat_messages (id, role, content, created_at) VALUES (?, ?, ?, ?)",
+    args: [crypto.randomUUID(), role, content, Date.now()],
+  });
+}
+
+export async function listChatMessages(limit = 50): Promise<ChatRow[]> {
+  const rs = await turso.execute({
+    sql: "SELECT * FROM chat_messages ORDER BY created_at DESC LIMIT ?",
+    args: [limit],
+  });
+  return rs.rows
+    .map((r) => r as unknown as Row)
+    .map((r) => ({
+      id: r.id as string,
+      role: r.role as "user" | "assistant",
+      content: r.content as string,
+      createdAt: Number(r.created_at),
+    }))
+    .reverse();
+}
+
+export async function clearChatMessages(): Promise<void> {
+  await turso.execute("DELETE FROM chat_messages");
 }
