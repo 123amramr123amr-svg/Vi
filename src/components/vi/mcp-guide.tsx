@@ -34,7 +34,12 @@ const TOOLS = [
   {
     icon: Clapperboard,
     name: "generate_video",
-    desc: "توليد فيديو جديد بمدة ودقة وارتفاع أصوات اختيارية",
+    desc: "توليد فيديو جديد بمدة ودقة وأصوات اختيارية — مع دعم تحريك صور مرفوعة (image-to-video)",
+  },
+  {
+    icon: Clapperboard,
+    name: "continue_video",
+    desc: "تكملة فيديو مكتمل كجزء جديد في سلسلة: من صور الجزء الجديد أو بتمديد تلقائي من النهاية",
   },
   {
     icon: ListChecks,
@@ -140,7 +145,7 @@ export function McpGuide() {
 
           {/* الأدوات المتاحة */}
           <div className="space-y-3">
-            <p className="text-sm font-bold">الأدوات المتاحة (8)</p>
+            <p className="text-sm font-bold">الأدوات المتاحة ({TOOLS.length})</p>
             <div className="grid gap-2 sm:grid-cols-2">
               {TOOLS.map((tool) => (
                 <div

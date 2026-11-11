@@ -92,6 +92,59 @@ const videoArgs = z.object({
     .boolean()
     .default(true)
     .describe("Whether to generate audio for the clip."),
+  image_urls: z
+    .array(z.string().url())
+    .max(3)
+    .optional()
+    .describe(
+      "Optional public https image URLs for image-to-video: the model animates them. Leave empty for pure text-to-video."
+    ),
+  ...waitSecondsArgs,
+});
+
+const continueArgs = z.object({
+  parent_id: z
+    .string()
+    .min(1)
+    .describe(
+      "Generation id of the previous successful VIDEO part to continue (from get_generation or list_generations; must have status=success). The new part is chained to it and gets part_number = parent + 1."
+    ),
+  prompt: z
+    .string()
+    .min(1)
+    .max(4096)
+    .describe(
+      "Description of what happens in the NEXT part: camera movement, actions, scene changes."
+    ),
+  mode: z
+    .enum(["images", "extend"])
+    .default("images")
+    .describe(
+      "images = animate the provided image_urls as the next part (recommended, default). extend = provider-native Video Extend that continues the exact same video from its end (no images needed)."
+    ),
+  image_urls: z
+    .array(z.string().url())
+    .max(3)
+    .optional()
+    .describe(
+      "Public https image URLs to animate (mode=images). Use any public image URL, or URLs like <server>/api/uploads/<id> after uploading via the website."
+    ),
+  duration: z
+    .number()
+    .int()
+    .min(1)
+    .max(15)
+    .default(15)
+    .describe("Length of the NEW part in seconds (1-15)."),
+  extend_at: z
+    .number()
+    .int()
+    .min(0)
+    .max(120)
+    .optional()
+    .describe(
+      "mode=extend only: second in the source video where the extension starts (0 = from the end, provider default)."
+    ),
   ...waitSecondsArgs,
 });
 
@@ -168,8 +221,15 @@ export function getToolDefs(): Array<Record<string, unknown>> {
       name: "generate_video",
       title: "Generate video",
       description:
-        "Create an AI video generation task (grok-imagine) in VI AI Studio. Images take ~20-60s; videos take a few minutes — use wait_seconds or poll get_generation until status is success/fail.",
+        "Create an AI video generation task (grok-imagine) in VI AI Studio. Optional image_urls animates the images (image-to-video). Images take ~20-60s; videos take a few minutes — use wait_seconds or poll get_generation until status is success/fail. To continue a finished video into a multi-part chain, use continue_video instead.",
       inputSchema: schemaOf(videoArgs),
+    },
+    {
+      name: "continue_video",
+      title: "Continue a video (next part)",
+      description:
+        "Create the NEXT part of a previously generated video (multi-part chains, 15s each). mode=images animates provided image_urls as the next part (aspect ratio and resolution are inherited from the parent); mode=extend uses the provider-native Video Extend to continue the exact same video from its end. Returns the new generation id; poll get_generation until success.",
+      inputSchema: schemaOf(continueArgs),
     },
     {
       name: "get_generation",
@@ -261,6 +321,8 @@ function serializeGeneration(row: Generation): Record<string, unknown> {
     resultUrls: row.resultUrls,
     error: row.error,
     published: row.published,
+    parentId: row.parentId,
+    partNumber: row.partNumber,
     createdAt: new Date(row.createdAt).toISOString(),
     updatedAt: new Date(row.updatedAt).toISOString(),
   };
@@ -330,6 +392,30 @@ export async function callTool(
         resolution: args.resolution,
         duration: args.duration,
         enableAudio: args.enable_audio,
+        imageUrls: args.image_urls,
+      });
+      return finishGeneration(row, args.wait_seconds);
+    }
+
+    case "continue_video": {
+      const args = parseArgs(continueArgs, rawArgs);
+      const prompt = args.prompt.trim();
+      if (!prompt) {
+        throw new ToolDefinitionError("Invalid arguments for tool — prompt is required");
+      }
+      if (args.mode === "images" && (!args.image_urls || args.image_urls.length === 0)) {
+        throw new ToolDefinitionError(
+          "Invalid arguments for tool — mode=images requires image_urls (or use mode=extend)."
+        );
+      }
+      const row = await startGeneration({
+        type: "video",
+        prompt,
+        duration: args.duration,
+        parentId: args.parent_id,
+        extend: args.mode === "extend",
+        extendAt: args.extend_at,
+        imageUrls: args.mode === "images" ? args.image_urls : undefined,
       });
       return finishGeneration(row, args.wait_seconds);
     }

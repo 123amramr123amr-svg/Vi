@@ -11,6 +11,7 @@ import {
   Download,
   Globe,
   Image as ImageIcon,
+  ImagePlus,
   Link2,
   Loader2,
   Plug,
@@ -19,6 +20,7 @@ import {
   Sparkles,
   Trash2,
   Video,
+  X,
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -82,14 +84,23 @@ export function Studio() {
   const [elapsed, setElapsed] = useState(0);
   const [tab, setTab] = useState("studio");
 
+  /* ----- حالة تكملة الفيديو (سلسلة أجزاء) ----- */
+  const [continueFrom, setContinueFrom] = useState<Generation | null>(null);
+  const [continueMode, setContinueMode] = useState<"images" | "extend">("images");
+  const [uploaded, setUploaded] = useState<Array<{ url: string; preview: string }>>([]);
+  const [uploading, setUploading] = useState(false);
+
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startedAtRef = useRef<number>(Date.now());
 
   const maxPrompt = type === "image" ? 20000 : 4096;
   const aspectOptions = type === "image" ? IMAGE_ASPECT_RATIOS : VIDEO_ASPECT_RATIOS;
   const resolutionOptions = type === "image" ? IMAGE_RESOLUTIONS : VIDEO_RESOLUTIONS;
-  const placeholder =
-    type === "image"
+  const continuing = type === "video" && continueFrom !== null;
+  const nextPartNumber = continueFrom ? (continueFrom.partNumber ?? 1) + 1 : null;
+  const placeholder = continuing
+    ? "مثال: تابع المشهد بحركة كاميرا بطيئة نحو الأفق مع ظهور الشمس تدريجيًا، نفس الأسلوب البصري…"
+    : type === "image"
       ? "مثال: قط فضائي يرتدي بدلة رائد فضاء، إضاءة سينمائية، تفاصيل عالية الدقة…"
       : "مثال: كاميرا تتحرك ببطء فوق شوارع مدينة مستقبلية ليلًا، حركة سلسة وإضاءة نيون…";
 
@@ -170,10 +181,88 @@ export function Studio() {
 
   function handleTypeChange(value: string) {
     if (!value || value === type) return;
+    if (continueFrom) cancelContinue();
     const next = value as GenerationType;
     setType(next);
     setAspect("auto");
     setResolution(next === "image" ? "1K" : "720p");
+  }
+
+  /* ----- تكملة الفيديو (سلسلة أجزاء) ----- */
+
+  /** تجهيز اللوحة لإنشاء الجزء التالي: وضع فيديو + وراثة إعدادات الجزء السابق */
+  function startContinue(item: Generation) {
+    setType("video");
+    setContinueFrom(item);
+    setContinueMode("images");
+    setUploaded([]);
+    setPrompt("");
+    const p = item.params ?? {};
+    setAspect(
+      p.aspectRatio && (VIDEO_ASPECT_RATIOS as readonly string[]).includes(p.aspectRatio)
+        ? p.aspectRatio
+        : "auto"
+    );
+    setResolution(
+      p.resolution && (VIDEO_RESOLUTIONS as readonly string[]).includes(p.resolution)
+        ? p.resolution
+        : "720p"
+    );
+    setDuration(typeof p.duration === "number" ? Math.min(15, Math.max(1, p.duration)) : 15);
+    setEnableAudio(p.enableAudio ?? true);
+    setTab("studio");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function cancelContinue() {
+    setContinueFrom(null);
+    setContinueMode("images");
+    setUploaded([]);
+  }
+
+  /** رفع صور الجزء الجديد إلى /api/uploads وإرجاع روابطها العامة */
+  async function uploadImages(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    const room = 3 - uploaded.length;
+    if (room <= 0) {
+      toast({ title: "الحد الأقصى 3 صور", variant: "destructive" });
+      return;
+    }
+    setUploading(true);
+    try {
+      for (const file of Array.from(files).slice(0, room)) {
+        if (file.size > 4 * 1024 * 1024) {
+          toast({
+            title: `تعذر رفع ${file.name}`,
+            description: "حجم الصورة يتجاوز 4 ميجابايت",
+            variant: "destructive",
+          });
+          continue;
+        }
+        const fd = new FormData();
+        fd.append("file", file);
+        const res = await fetch("/api/uploads", { method: "POST", body: fd });
+        const data = (await res.json().catch(() => ({}))) as {
+          url?: string;
+          error?: string;
+        };
+        if (!res.ok || !data.url) {
+          throw new Error(data.error ?? "تعذر رفع الصورة");
+        }
+        setUploaded((prev) => [
+          ...prev,
+          { url: data.url!, preview: URL.createObjectURL(file) },
+        ]);
+      }
+    } catch (err) {
+      toast({
+        title: "خطأ في رفع الصور",
+        description: err instanceof Error ? err.message : "حاول مرة أخرى",
+        variant: "destructive",
+      });
+    } finally {
+      setUploading(false);
+    }
   }
 
   async function submit() {
@@ -184,7 +273,24 @@ export function Studio() {
       const payload =
         type === "image"
           ? { type, prompt: trimmed, aspectRatio: aspect, resolution }
-          : { type, prompt: trimmed, aspectRatio: aspect, resolution, duration, enableAudio };
+          : {
+              type,
+              prompt: trimmed,
+              aspectRatio: aspect,
+              resolution,
+              duration,
+              enableAudio,
+              ...(continuing && continueFrom
+                ? {
+                    parentId: continueFrom.id,
+                    extend: continueMode === "extend",
+                    imageUrls:
+                      continueMode === "images"
+                        ? uploaded.map((u) => u.url)
+                        : undefined,
+                  }
+                : {}),
+            };
 
       const res = await fetch("/api/generate", {
         method: "POST",
@@ -195,6 +301,8 @@ export function Studio() {
         id?: string;
         taskId?: string;
         error?: string;
+        parentId?: string | null;
+        partNumber?: number | null;
       };
       if (!res.ok || !data.id) {
         throw new Error(data.error ?? "تعذر إنشاء مهمة التوليد");
@@ -209,15 +317,25 @@ export function Studio() {
         params:
           type === "image"
             ? { aspectRatio: aspect, resolution }
-            : { aspectRatio: aspect, resolution, duration, enableAudio },
+            : {
+                aspectRatio: aspect,
+                resolution,
+                duration,
+                enableAudio,
+              },
         status: "waiting",
         resultUrls: [],
         error: null,
         createdAt: Date.now(),
         updatedAt: Date.now(),
+        published: false,
+        publishedAt: null,
+        parentId: data.parentId ?? null,
+        partNumber: data.partNumber ?? null,
       });
       startPolling(data.id);
       loadHistory();
+      if (continuing) cancelContinue();
     } catch (err) {
       toast({
         title: "خطأ",
@@ -380,9 +498,112 @@ export function Studio() {
                 </ToggleGroupItem>
               </ToggleGroup>
 
+              {continuing && continueFrom && (
+                <div className="space-y-3 rounded-xl border border-fuchsia-500/40 bg-fuchsia-500/10 p-4">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="flex items-center gap-1.5 text-sm font-extrabold text-fuchsia-300">
+                        <Video className="h-4 w-4 shrink-0" />
+                        تكملة الفيديو — الجزء الجديد سيصبح رقم {nextPartNumber}
+                      </p>
+                      <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
+                        {continueFrom.prompt}
+                      </p>
+                    </div>
+                    <button
+                      onClick={cancelContinue}
+                      aria-label="إلغاء التكملة والرجوع لإنشاء فيديو مستقل"
+                      className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-black/30 text-muted-foreground transition hover:bg-red-600 hover:text-white"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+
+                  <ToggleGroup
+                    type="single"
+                    value={continueMode}
+                    onValueChange={(v) => v && setContinueMode(v as "images" | "extend")}
+                    className="grid w-full grid-cols-2 gap-2"
+                  >
+                    <ToggleGroupItem
+                      value="images"
+                      className="h-9 gap-1.5 rounded-lg border border-border text-xs data-[state=on]:border-primary data-[state=on]:bg-primary data-[state=on]:text-primary-foreground"
+                    >
+                      <ImagePlus className="h-3.5 w-3.5" /> من صور الجزء الجديد
+                    </ToggleGroupItem>
+                    <ToggleGroupItem
+                      value="extend"
+                      className="h-9 gap-1.5 rounded-lg border border-border text-xs data-[state=on]:border-primary data-[state=on]:bg-primary data-[state=on]:text-primary-foreground"
+                    >
+                      <Clapperboard className="h-3.5 w-3.5" /> تكملة تلقائية من النهاية
+                    </ToggleGroupItem>
+                  </ToggleGroup>
+
+                  {continueMode === "images" ? (
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap gap-2">
+                        {uploaded.map((img, i) => (
+                          <div
+                            key={img.url}
+                            className="relative h-16 w-16 overflow-hidden rounded-lg border border-border"
+                          >
+                            <img
+                              src={img.preview}
+                              alt={`صورة الجزء ${i + 1}`}
+                              className="h-full w-full object-cover"
+                            />
+                            <button
+                              onClick={() =>
+                                setUploaded((prev) => prev.filter((x) => x.url !== img.url))
+                              }
+                              aria-label="إزالة الصورة"
+                              className="absolute end-0.5 top-0.5 grid h-5 w-5 place-items-center rounded-md bg-black/60 text-white transition hover:bg-red-600"
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          </div>
+                        ))}
+                        {uploaded.length < 3 && (
+                          <label className="grid h-16 w-16 cursor-pointer place-items-center rounded-lg border border-dashed border-border text-muted-foreground transition hover:border-fuchsia-500/60 hover:text-fuchsia-300">
+                            {uploading ? (
+                              <Loader2 className="h-5 w-5 animate-spin" />
+                            ) : (
+                              <ImagePlus className="h-5 w-5" />
+                            )}
+                            <span className="sr-only">إضافة صورة للجزء الجديد</span>
+                            <input
+                              type="file"
+                              accept="image/png,image/jpeg,image/webp"
+                              multiple
+                              className="hidden"
+                              onChange={(e) => {
+                                void uploadImages(e.target.files);
+                                e.currentTarget.value = "";
+                              }}
+                            />
+                          </label>
+                        )}
+                      </div>
+                      <p className="text-[11px] leading-5 text-muted-foreground">
+                        ارفع صور الجزء الجديد (حتى 3 صور — PNG/JPG/WebP حتى 4 ميجا) وسيحركها
+                        النموذج كجزء جديد يرتبط بالفيديو الأصلي. نسبة الأبعاد والدقة موروثة من
+                        الجزء السابق.
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="text-[11px] leading-5 text-muted-foreground">
+                      سيُكمل النموذج نفس الفيديو تلقائيًا من نهايته — اكتب فقط وصف الجزء الجديد
+                      (حركة الكاميرا، الأحداث…) دون حاجة لرفع صور.
+                    </p>
+                  )}
+                </div>
+              )}
+
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <Label htmlFor="prompt">وصف المحتوى</Label>
+                  <Label htmlFor="prompt">
+                    {continuing ? "وصف الجزء الجديد" : "وصف المحتوى"}
+                  </Label>
                   <span className="text-xs text-muted-foreground" dir="ltr">
                     {prompt.length} / {maxPrompt}
                   </span>
@@ -434,7 +655,11 @@ export function Studio() {
                 <div className="space-y-4 rounded-xl border border-border/70 bg-muted/30 p-4">
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">
-                      <Label>مدة الفيديو</Label>
+                      <Label>
+                        {continuing && continueMode === "extend"
+                          ? "مدة الجزء المضاف"
+                          : "مدة الفيديو"}
+                      </Label>
                       <span className="text-sm font-bold text-fuchsia-300">
                         {duration} ثانية
                       </span>
@@ -471,10 +696,16 @@ export function Studio() {
               >
                 {submitting ? (
                   <Loader2 className="h-5 w-5 animate-spin" />
+                ) : continuing ? (
+                  <Clapperboard className="h-5 w-5" />
                 ) : (
                   <Sparkles className="h-5 w-5" />
                 )}
-                {submitting ? "جارٍ الإرسال…" : "توليد الآن"}
+                {submitting
+                  ? "جارٍ الإرسال…"
+                  : continuing
+                    ? "إنشاء الجزء التالي"
+                    : "توليد الآن"}
               </Button>
 
               <p className="text-center text-[11px] leading-5 text-muted-foreground">
@@ -502,7 +733,7 @@ export function Studio() {
                     </p>
                   </div>
                 ) : current.status === "success" ? (
-                  <MediaResult item={current} onCopy={copyUrl} />
+                  <MediaResult item={current} onCopy={copyUrl} onContinue={startContinue} />
                 ) : current.status === "fail" ? (
                   <div className="space-y-4">
                     <Alert variant="destructive">
@@ -614,9 +845,11 @@ export function Studio() {
 function MediaResult({
   item,
   onCopy,
+  onContinue,
 }: {
   item: Generation;
   onCopy: (url: string) => void;
+  onContinue?: (item: Generation) => void;
 }) {
   const url = item.resultUrls[0];
   if (!url) {
@@ -664,6 +897,23 @@ function MediaResult({
         >
           <Copy className="h-4 w-4" /> نسخ الرابط
         </Button>
+        {item.type === "video" && onContinue && (
+          <Button
+            size="sm"
+            onClick={() => onContinue(item)}
+            className="gap-1.5 bg-gradient-to-l from-fuchsia-600 to-purple-600 text-white shadow-md shadow-fuchsia-600/25 hover:from-fuchsia-500 hover:to-purple-500"
+          >
+            <Clapperboard className="h-4 w-4" /> تكملة الفيديو (جزء تاني)
+          </Button>
+        )}
+        {item.partNumber != null && (
+          <Badge
+            variant="outline"
+            className="border-fuchsia-500/40 bg-fuchsia-500/10 text-fuchsia-300"
+          >
+            جزء {item.partNumber}
+          </Badge>
+        )}
         <Badge variant="outline" className="font-mono text-[10px]" dir="ltr">
           {item.model}
         </Badge>
@@ -780,6 +1030,14 @@ function HistoryCard({
         )}
         <div className="absolute start-2 top-2 flex flex-wrap gap-1">
           <TypeBadge type={item.type} />
+          {item.partNumber != null && (
+            <Badge
+              variant="outline"
+              className="border-fuchsia-300/40 bg-black/45 text-[10px] text-fuchsia-100 backdrop-blur-sm"
+            >
+              جزء {item.partNumber}
+            </Badge>
+          )}
           {item.published && (
             <Badge
               variant="outline"

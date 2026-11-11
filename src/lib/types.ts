@@ -17,6 +17,10 @@ export interface GenerationParams {
   enableAudio?: boolean;
   /** صحيح إذا أنشأتها الأوتوبايلوت (تُنشر تلقائيًا عند الاكتمال) */
   autopilot?: boolean;
+  /** صور ارفعت للنموذج ليحركها (image-to-video) — للفيديو فقط */
+  imageUrls?: string[];
+  /** ثانية بداية التكملة داخل الفيديو الأصلي عند استخدام التمديد التلقائي */
+  extendAt?: number;
 }
 
 export interface Generation {
@@ -34,6 +38,10 @@ export interface Generation {
   /** منشورة في المعرض العام /gallery */
   published: boolean;
   publishedAt: number | null;
+  /** معرّف الفيديو الأصلي إذا كان هذا العنصر جزء تكملة منه */
+  parentId: string | null;
+  /** رقم الجزء في السلسلة (1 للأصلي، 2 و3… للأجزاء التالية) */
+  partNumber: number | null;
 }
 
 const ACTIVE: readonly GenerationStatus[] = [

@@ -55,10 +55,12 @@ export function ensureSchema(): Promise<void> {
       await turso.execute(
         "CREATE INDEX IF NOT EXISTS idx_generations_created_at ON generations (created_at DESC)"
       );
-      // ترقية قاعدة قائمة: أعمدة النشر في المعرض العام
+      // ترقية قاعدة قائمة: أعمدة النشر في المعرض العام + أعمدة سلسلة تكملة الفيديو
       for (const stmt of [
         "ALTER TABLE generations ADD COLUMN published INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE generations ADD COLUMN published_at INTEGER",
+        "ALTER TABLE generations ADD COLUMN parent_id TEXT",
+        "ALTER TABLE generations ADD COLUMN part_number INTEGER",
       ]) {
         try {
           await turso.execute(stmt);
@@ -69,6 +71,19 @@ export function ensureSchema(): Promise<void> {
       await turso.execute(
         "CREATE INDEX IF NOT EXISTS idx_generations_published ON generations (published, created_at DESC)"
       );
+      await turso.execute(
+        "CREATE INDEX IF NOT EXISTS idx_generations_parent ON generations (parent_id, part_number)"
+      );
+      // الصور المرفوعة (تُخدم على رابط عام ليستخدمها مزوّد التوليد في image-to-video)
+      await turso.execute(`
+        CREATE TABLE IF NOT EXISTS uploads (
+          id TEXT PRIMARY KEY,
+          mime TEXT NOT NULL,
+          size INTEGER NOT NULL,
+          data BLOB NOT NULL,
+          created_at INTEGER NOT NULL
+        )
+      `);
       await turso.execute(`
         CREATE TABLE IF NOT EXISTS chat_messages (
           id TEXT PRIMARY KEY,
@@ -118,13 +133,15 @@ function rowToGeneration(row: Row): Generation {
     updatedAt: Number(row.updated_at),
     published: Number(row.published ?? 0) === 1,
     publishedAt: row.published_at ? Number(row.published_at) : null,
+    parentId: (row.parent_id as string) || null,
+    partNumber: row.part_number == null ? null : Number(row.part_number),
   };
 }
 
 export async function insertGeneration(gen: Generation): Promise<void> {
   await turso.execute({
-    sql: `INSERT INTO generations (id, task_id, type, model, prompt, params, status, result_urls, error, created_at, updated_at, published, published_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    sql: `INSERT INTO generations (id, task_id, type, model, prompt, params, status, result_urls, error, created_at, updated_at, published, published_at, parent_id, part_number)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     args: [
       gen.id,
       gen.taskId,
@@ -139,6 +156,8 @@ export async function insertGeneration(gen: Generation): Promise<void> {
       gen.updatedAt,
       gen.published ? 1 : 0,
       gen.publishedAt,
+      gen.parentId,
+      gen.partNumber,
     ],
   });
 }
@@ -169,6 +188,7 @@ export async function updateGeneration(
     error?: string | null;
     published?: boolean;
     publishedAt?: number | null;
+    partNumber?: number | null;
   }
 ): Promise<void> {
   const sets: string[] = [];
@@ -196,6 +216,10 @@ export async function updateGeneration(
   if (fields.publishedAt !== undefined) {
     sets.push("published_at = ?");
     args.push(fields.publishedAt);
+  }
+  if (fields.partNumber !== undefined) {
+    sets.push("part_number = ?");
+    args.push(fields.partNumber);
   }
   if (sets.length === 0) return;
   sets.push("updated_at = ?");
@@ -244,6 +268,43 @@ export async function countAutopilot(): Promise<number> {
   });
   const row = rs.rows[0] as unknown as Row | undefined;
   return Number(row?.c ?? 0);
+}
+
+/* ---------- الصور المرفوعة (لتغذية نموذج الفيديو بها) ---------- */
+
+export interface UploadRow {
+  id: string;
+  mime: string;
+  size: number;
+  data: Uint8Array;
+  createdAt: number;
+}
+
+export async function insertUpload(up: {
+  id: string;
+  mime: string;
+  data: Uint8Array;
+}): Promise<void> {
+  await turso.execute({
+    sql: "INSERT INTO uploads (id, mime, size, data, created_at) VALUES (?, ?, ?, ?, ?)",
+    args: [up.id, up.mime, up.data.byteLength, up.data, Date.now()],
+  });
+}
+
+export async function getUpload(id: string): Promise<UploadRow | null> {
+  const rs = await turso.execute({
+    sql: "SELECT * FROM uploads WHERE id = ? LIMIT 1",
+    args: [id],
+  });
+  if (rs.rows.length === 0) return null;
+  const row = rs.rows[0] as unknown as Row;
+  return {
+    id: row.id as string,
+    mime: row.mime as string,
+    size: Number(row.size),
+    data: row.data as unknown as Uint8Array,
+    createdAt: Number(row.created_at),
+  };
 }
 
 /* ---------- رسائل المحادثة (شات جي بي تي) ---------- */

@@ -54,6 +54,8 @@ const generationSchema = {
     updatedAt: { type: "number", description: "Last update time as epoch milliseconds." },
     published: { type: "boolean", description: "True when the work is visible in the public gallery at /gallery." },
     publishedAt: { type: ["number", "null"], description: "Publish time as epoch milliseconds." },
+    parentId: { type: ["string", "null"], description: "Id of the previous video part when this row is a continuation (multi-part video chain)." },
+    partNumber: { type: ["integer", "null"], description: "Part number in the chain: 1 = original video, 2/3/... = continuations." },
   },
   required: ["id", "type", "model", "prompt", "status", "resultUrls"],
 };
@@ -68,7 +70,7 @@ export async function GET(req: NextRequest) {
     info: {
       title: "Vi AI Studio",
       description:
-        "Control the Vi AI Studio app end to end: create AI image and video generation tasks, poll them until finished, publish finished works to the public gallery (/gallery), run the autopilot that generates and publishes new videos automatically, and browse or delete the history. Typical flow: call createGeneration (or runAutopilot), then keep calling getGeneration (use wait=8) until status is success or fail, then call publishGeneration and share the resultUrls links with the user.",
+        "Control the Vi AI Studio app end to end: create AI image and video generation tasks, continue a finished video into multi-part chains (part 2, part 3, ... each up to 15s, by animating uploaded images or by native Video Extend), poll them until finished, publish finished works to the public gallery (/gallery), run the autopilot that generates and publishes new videos automatically, and browse or delete the history. Typical flow: call createGeneration (or runAutopilot), then keep calling getGeneration (use wait=8) until status is success or fail, then call publishGeneration and share the resultUrls links with the user.",
       version: "1.1.0",
     },
     servers: [{ url: baseUrl }],
@@ -78,7 +80,7 @@ export async function GET(req: NextRequest) {
           operationId: "createGeneration",
           summary: "Create a new AI image or video generation task",
           description:
-            "Starts generating an image or a video from a text prompt. Returns { id, taskId, status }. After this, poll getGeneration with the returned id until status is success or fail. Prompt should be a rich visual description (subject, style, lighting, camera angle, mood); English prompts give the best results.",
+            "Starts generating an image or a video from a text prompt. Returns { id, taskId, status, parentId, partNumber }. After this, poll getGeneration with the returned id until status is success or fail. Prompt should be a rich visual description (subject, style, lighting, camera angle, mood); English prompts give the best results. To continue a finished video as the next part of a chain, pass parentId (and optionally imageUrls or extend=true) — the response partNumber will be parent partNumber + 1.",
           requestBody: {
             required: true,
             content: {
@@ -113,6 +115,28 @@ export async function GET(req: NextRequest) {
                       type: "boolean",
                       description: "Video only: generate audio track. Default true.",
                     },
+                    parentId: {
+                      type: "string",
+                      description:
+                        "Video only: id of a previous SUCCESSFUL video generation to continue. The new task becomes the next part of that video chain (aspect ratio and resolution are inherited from the parent when omitted). Use getGeneration/listGenerations to find the id.",
+                    },
+                    imageUrls: {
+                      type: "array",
+                      items: { type: "string" },
+                      maxItems: 3,
+                      description:
+                        "Video only: up to 3 public https image URLs for image-to-video — the model animates them. Especially useful when continuing a video (the images act as the next scene). Any public image URL works; the app's own uploads look like <server>/api/uploads/<id>.",
+                    },
+                    extend: {
+                      type: "boolean",
+                      description:
+                        "Video only with parentId: use the provider-native Video Extend model (grok-imagine/extend) so the new part continues the EXACT same video from its end. When true, imageUrls are ignored and no aspectRatio/resolution is needed.",
+                    },
+                    extendAt: {
+                      type: "integer",
+                      description:
+                        "With extend=true: second in the source video where the extension starts (0 = from the end, provider default).",
+                    },
                   },
                   required: ["type", "prompt"],
                 },
@@ -130,6 +154,8 @@ export async function GET(req: NextRequest) {
                       id: { type: "string" },
                       taskId: { type: "string" },
                       status: { type: "string", enum: statusEnum },
+                      parentId: { type: ["string", "null"] },
+                      partNumber: { type: ["integer", "null"] },
                     },
                     required: ["id", "status"],
                   },
