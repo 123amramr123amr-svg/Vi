@@ -1,11 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { createKieTask, IMAGE_MODEL, VIDEO_MODEL } from "@/lib/kie";
-import { ensureSchema, insertGeneration, updateGeneration } from "@/lib/turso";
+import { startGeneration } from "@/lib/tasks";
 import {
   IMAGE_ASPECT_RATIOS,
   VIDEO_ASPECT_RATIOS,
-  type Generation,
 } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -31,8 +29,6 @@ const bodySchema = z.discriminatedUnion("type", [imageBody, videoBody]);
 
 /** POST /api/generate — إنشاء مهمة توليد صورة أو فيديو جديدة */
 export async function POST(req: NextRequest) {
-  await ensureSchema();
-
   const raw = await req.json().catch(() => null);
   const parsed = bodySchema.safeParse(raw);
   if (!parsed.success) {
@@ -44,61 +40,23 @@ export async function POST(req: NextRequest) {
   }
   const body = parsed.data;
 
-  const now = Date.now();
-  const id = crypto.randomUUID();
-  const model = body.type === "image" ? IMAGE_MODEL : VIDEO_MODEL;
-
-  const input: Record<string, unknown> =
-    body.type === "image"
-      ? {
-          prompt: body.prompt,
-          aspect_ratio: body.aspectRatio,
-          resolution: body.resolution,
-          output_format: "png",
-        }
-      : {
-          prompt: body.prompt,
-          aspect_ratio: body.aspectRatio,
-          resolution: body.resolution,
-          duration: body.duration,
-          enable_audio: body.enableAudio,
-        };
-
-  const gen: Generation = {
-    id,
-    taskId: null,
-    type: body.type,
-    model,
-    prompt: body.prompt,
-    params:
-      body.type === "image"
-        ? { aspectRatio: body.aspectRatio, resolution: body.resolution }
-        : {
-            aspectRatio: body.aspectRatio,
-            resolution: body.resolution,
-            duration: body.duration,
-            enableAudio: body.enableAudio,
-          },
-    status: "pending",
-    resultUrls: [],
-    error: null,
-    createdAt: now,
-    updatedAt: now,
-  };
-
   try {
-    await insertGeneration(gen);
-    const taskId = await createKieTask(model, input);
-    await updateGeneration(id, { taskId, status: "waiting" });
-    return NextResponse.json({ id, taskId, status: "waiting" }, { status: 201 });
+    const gen = await startGeneration({
+      type: body.type,
+      prompt: body.prompt,
+      aspectRatio: body.aspectRatio,
+      resolution: body.resolution,
+      ...(body.type === "video"
+        ? { duration: body.duration, enableAudio: body.enableAudio }
+        : {}),
+    });
+    return NextResponse.json(
+      { id: gen.id, taskId: gen.taskId, status: gen.status },
+      { status: 201 }
+    );
   } catch (err) {
     const message =
       err instanceof Error ? err.message : "حدث خطأ غير متوقع أثناء إنشاء المهمة";
-    try {
-      await updateGeneration(id, { status: "fail", error: message });
-    } catch {
-      /* لا شيء — قاعدة البيانات غير متاحة أيضًا */
-    }
-    return NextResponse.json({ id, error: message }, { status: 502 });
+    return NextResponse.json({ error: message }, { status: 502 });
   }
 }

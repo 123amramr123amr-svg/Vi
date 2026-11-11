@@ -57,7 +57,7 @@ const STEPS = [
   },
 ];
 
-function CopyButton({ text, label }: { text: string; label: string }) {
+export function CopyButton({ text, label }: { text: string; label: string }) {
   const { toast } = useToast();
   const [copied, setCopied] = useState(false);
 
@@ -91,7 +91,7 @@ const useOrigin = () =>
     () => "" // قيمة الخادم (SSR)
   );
 
-function UrlRow({ label, path, title }: { label: string; path: string; title: string }) {
+export function UrlRow({ label, path, title }: { label: string; path: string; title: string }) {
   const { toast } = useToast();
   const [copied, setCopied] = useState(false);
   // الدومين الحالي (يعمل على localhost وعلى Vercel تلقائيًا)

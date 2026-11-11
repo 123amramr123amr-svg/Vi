@@ -13,6 +13,7 @@ import {
   Image as ImageIcon,
   Link2,
   Loader2,
+  Plug,
   RefreshCw,
   Rocket,
   Sparkles,
@@ -47,6 +48,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ChatPanel } from "@/components/vi/chat-panel";
 import { GptGuide } from "@/components/vi/gpt-guide";
 import { AutoPublish } from "@/components/vi/auto-publish";
+import { McpGuide } from "@/components/vi/mcp-guide";
 import { useToast } from "@/hooks/use-toast";
 import {
   IMAGE_ASPECT_RATIOS,
@@ -329,7 +331,7 @@ export function Studio() {
 
       <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 lg:py-10">
         <Tabs value={tab} onValueChange={(v) => setTab(v)}>
-          <TabsList className="mx-auto mb-6 grid w-full max-w-3xl grid-cols-4">
+          <TabsList className="mx-auto mb-6 grid w-full max-w-3xl grid-cols-3 sm:grid-cols-5">
             <TabsTrigger value="studio" className="gap-1.5">
               <ImageIcon className="h-4 w-4" />
               الاستوديو
@@ -345,6 +347,10 @@ export function Studio() {
             <TabsTrigger value="gpt-link" className="gap-1.5">
               <Link2 className="h-4 w-4" />
               ربط ChatGPT
+            </TabsTrigger>
+            <TabsTrigger value="mcp" className="gap-1.5">
+              <Plug className="h-4 w-4" />
+              MCP
             </TabsTrigger>
           </TabsList>
           <TabsContent value="studio" className="mt-0">
@@ -584,6 +590,9 @@ export function Studio() {
           </TabsContent>
           <TabsContent value="gpt-link" className="mt-0">
             <GptGuide />
+          </TabsContent>
+          <TabsContent value="mcp" className="mt-0">
+            <McpGuide />
           </TabsContent>
         </Tabs>
       </main>
