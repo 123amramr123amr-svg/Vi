@@ -1,69 +1,29 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+# الأسرار — لا ترفع أبدًا
+.env
+.env.local
+.env.*.local
+*.pem
 
 # dependencies
-node_modules
-/.pnp
-.pnp.*
-.yarn/*
-!.yarn/patches
-!.yarn/plugins
-!.yarn/releases
-!.yarn/versions
-
-# testing
-/coverage
+node_modules/
 
 # next.js
-/.next/
-/out/
-
-# production
-/build
+.next/
+out/
+build/
 
 # misc
 .DS_Store
 *.pem
-
-# debug
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-.pnpm-debug.log*
+bun.lock.bak
 
-# env files (can opt-in for committing if needed)
-.env*
-
-# vercel
-.vercel
-
-
-# typescript
-*.tsbuildinfo
-next-env.d.ts
-local-*
-.claude
-.z-ai-config
-*.log
+# بيئة العمل المحلية
 dev.log
-dev.out.log
-test
-prompt
-
-server.log
-# Skills directory
-/skills/
-
-# sandbox-only files (not part of the app)
-.zscripts/
-Caddyfile
 db/
-examples/
-mini-services/
-tests/
-download/
-upload/
-scripts/
+tool-results/
 agent-ctx/
-app.log
-# نسمح برفع ملف المثال (بدون أي أسرار)
-!.env.example
+skills/
+.vercel
