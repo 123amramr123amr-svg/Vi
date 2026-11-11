@@ -27,3 +27,7 @@ tool-results/
 agent-ctx/
 skills/
 .vercel
+
+# build artifacts
+tsconfig.tsbuildinfo
+*.tsbuildinfo
