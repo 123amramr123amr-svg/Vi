@@ -9,10 +9,12 @@ import {
   Clapperboard,
   Copy,
   Download,
+  Globe,
   Image as ImageIcon,
   Link2,
   Loader2,
   RefreshCw,
+  Rocket,
   Sparkles,
   Trash2,
   Video,
@@ -44,6 +46,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ChatPanel } from "@/components/vi/chat-panel";
 import { GptGuide } from "@/components/vi/gpt-guide";
+import { AutoPublish } from "@/components/vi/auto-publish";
 import { useToast } from "@/hooks/use-toast";
 import {
   IMAGE_ASPECT_RATIOS,
@@ -254,6 +257,39 @@ export function Studio() {
     }
   }
 
+  async function togglePublish(item: Generation) {
+    try {
+      const res = await fetch(`/api/generations/${item.id}/publish`, {
+        method: item.published ? "DELETE" : "PUT",
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        item?: Generation;
+        error?: string;
+      };
+      if (!res.ok || !data.item) {
+        throw new Error(data.error ?? "تعذر تغيير حالة النشر");
+      }
+      setHistory((prev) =>
+        prev.map((x) => (x.id === item.id ? data.item! : x))
+      );
+      if (currentId === item.id) setCurrent(data.item);
+      toast({
+        title: item.published
+          ? "تم إلغاء النشر من المعرض"
+          : "تم النشر في المعرض العام ✅",
+        description: item.published
+          ? undefined
+          : "العمل ظاهر الآن للجميع على /gallery",
+      });
+    } catch (err) {
+      toast({
+        title: "خطأ",
+        description: err instanceof Error ? err.message : "حاول مرة أخرى",
+        variant: "destructive",
+      });
+    }
+  }
+
   async function copyUrl(url: string) {
     try {
       await navigator.clipboard.writeText(url);
@@ -293,7 +329,7 @@ export function Studio() {
 
       <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 lg:py-10">
         <Tabs value={tab} onValueChange={(v) => setTab(v)}>
-          <TabsList className="mx-auto mb-6 grid w-full max-w-2xl grid-cols-3">
+          <TabsList className="mx-auto mb-6 grid w-full max-w-3xl grid-cols-4">
             <TabsTrigger value="studio" className="gap-1.5">
               <ImageIcon className="h-4 w-4" />
               الاستوديو
@@ -301,6 +337,10 @@ export function Studio() {
             <TabsTrigger value="chat" className="gap-1.5">
               <Bot className="h-4 w-4" />
               شات جي بي تي
+            </TabsTrigger>
+            <TabsTrigger value="auto" className="gap-1.5">
+              <Rocket className="h-4 w-4" />
+              النشر التلقائي
             </TabsTrigger>
             <TabsTrigger value="gpt-link" className="gap-1.5">
               <Link2 className="h-4 w-4" />
@@ -527,6 +567,7 @@ export function Studio() {
                       item={item}
                       onOpen={openItem}
                       onDelete={deleteItem}
+                      onTogglePublish={togglePublish}
                     />
                   ))}
                 </div>
@@ -537,6 +578,9 @@ export function Studio() {
           </TabsContent>
           <TabsContent value="chat" className="mt-0">
             <ChatPanel onOpenResult={openResultFromChat} />
+          </TabsContent>
+          <TabsContent value="auto" className="mt-0">
+            <AutoPublish />
           </TabsContent>
           <TabsContent value="gpt-link" className="mt-0">
             <GptGuide />
@@ -678,10 +722,12 @@ function HistoryCard({
   item,
   onOpen,
   onDelete,
+  onTogglePublish,
 }: {
   item: Generation;
   onOpen: (g: Generation) => void;
   onDelete: (id: string) => void;
+  onTogglePublish: (g: Generation) => void;
 }) {
   const active = isActiveStatus(item.status);
   const firstUrl = item.resultUrls[0] ?? null;
@@ -723,19 +769,47 @@ function HistoryCard({
             )}
           </div>
         )}
-        <div className="absolute start-2 top-2">
+        <div className="absolute start-2 top-2 flex flex-wrap gap-1">
           <TypeBadge type={item.type} />
+          {item.published && (
+            <Badge
+              variant="outline"
+              className="gap-1 border-emerald-400/40 bg-emerald-500/30 text-[10px] text-emerald-100 backdrop-blur-sm"
+            >
+              <Globe className="h-3 w-3" /> منشور
+            </Badge>
+          )}
         </div>
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete(item.id);
-          }}
-          aria-label="حذف من السجل"
-          className="absolute end-2 top-2 grid h-7 w-7 place-items-center rounded-lg bg-black/50 text-white/80 opacity-0 transition focus-visible:opacity-100 group-hover:opacity-100 hover:bg-red-600 hover:text-white"
+        <div
+          className="absolute end-2 top-2 flex flex-col gap-1 opacity-0 transition focus-visible:opacity-100 group-hover:opacity-100"
         >
-          <Trash2 className="h-3.5 w-3.5" />
-        </button>
+          {item.status === "success" && item.resultUrls.length > 0 && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onTogglePublish(item);
+              }}
+              aria-label={item.published ? "إلغاء النشر من المعرض" : "نشر في المعرض العام"}
+              className={`grid h-7 w-7 place-items-center rounded-lg bg-black/50 text-white/80 transition hover:text-white ${
+                item.published
+                  ? "hover:bg-amber-600"
+                  : "hover:bg-emerald-600"
+              }`}
+            >
+              <Globe className="h-3.5 w-3.5" />
+            </button>
+          )}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete(item.id);
+            }}
+            aria-label="حذف من السجل"
+            className="grid h-7 w-7 place-items-center rounded-lg bg-black/50 text-white/80 transition hover:bg-red-600 hover:text-white"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
       <div className="space-y-1 p-3">
         <p className="line-clamp-2 min-h-10 text-xs font-medium leading-5">

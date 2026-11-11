@@ -15,6 +15,8 @@ export interface GenerationParams {
   resolution?: string;
   duration?: number;
   enableAudio?: boolean;
+  /** صحيح إذا أنشأتها الأوتوبايلوت (تُنشر تلقائيًا عند الاكتمال) */
+  autopilot?: boolean;
 }
 
 export interface Generation {
@@ -29,6 +31,9 @@ export interface Generation {
   error: string | null;
   createdAt: number;
   updatedAt: number;
+  /** منشورة في المعرض العام /gallery */
+  published: boolean;
+  publishedAt: number | null;
 }
 
 const ACTIVE: readonly GenerationStatus[] = [

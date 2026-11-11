@@ -1,3 +1,4 @@
+import { mkdirSync } from "node:fs";
 import { createClient } from "@libsql/client";
 import {
   type Generation,
@@ -9,10 +10,24 @@ import {
 /**
  * عميل Turso (libSQL).
  * - في الإنتاج / Vercel: يجب تعريف TURSO_DATABASE_URL و TURSO_AUTH_TOKEN.
- * - محليًا بدون متغيرات بيئة يتم الرجوع إلى ملف SQLite محلي.
+ * - محليًا بدون متغيرات بيئة يتم الرجوع إلى ملف SQLite محلي
+ *   (يُنشأ المجلد تلقائيًا عند الحاجة).
  */
+const DB_URL = process.env.TURSO_DATABASE_URL ?? "file:./db/local.db";
+
+if (DB_URL.startsWith("file:")) {
+  // @libsql/client لا ينشئ المجلد الأب تلقائيًا — نضمن وجوده
+  const path = DB_URL.slice("file:".length);
+  const dir = path.slice(0, Math.max(path.lastIndexOf("/"), 0)) || ".";
+  try {
+    mkdirSync(dir, { recursive: true });
+  } catch {
+    /* المجلد موجود مسبقًا */
+  }
+}
+
 export const turso = createClient({
-  url: process.env.TURSO_DATABASE_URL ?? "file:./db/local.db",
+  url: DB_URL,
   authToken: process.env.TURSO_AUTH_TOKEN,
 });
 
@@ -39,6 +54,20 @@ export function ensureSchema(): Promise<void> {
       `);
       await turso.execute(
         "CREATE INDEX IF NOT EXISTS idx_generations_created_at ON generations (created_at DESC)"
+      );
+      // ترقية قاعدة قائمة: أعمدة النشر في المعرض العام
+      for (const stmt of [
+        "ALTER TABLE generations ADD COLUMN published INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE generations ADD COLUMN published_at INTEGER",
+      ]) {
+        try {
+          await turso.execute(stmt);
+        } catch {
+          /* العمود موجود مسبقًا */
+        }
+      }
+      await turso.execute(
+        "CREATE INDEX IF NOT EXISTS idx_generations_published ON generations (published, created_at DESC)"
       );
       await turso.execute(`
         CREATE TABLE IF NOT EXISTS chat_messages (
@@ -87,13 +116,15 @@ function rowToGeneration(row: Row): Generation {
     error: (row.error as string) || null,
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
+    published: Number(row.published ?? 0) === 1,
+    publishedAt: row.published_at ? Number(row.published_at) : null,
   };
 }
 
 export async function insertGeneration(gen: Generation): Promise<void> {
   await turso.execute({
-    sql: `INSERT INTO generations (id, task_id, type, model, prompt, params, status, result_urls, error, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    sql: `INSERT INTO generations (id, task_id, type, model, prompt, params, status, result_urls, error, created_at, updated_at, published, published_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     args: [
       gen.id,
       gen.taskId,
@@ -106,6 +137,8 @@ export async function insertGeneration(gen: Generation): Promise<void> {
       gen.error,
       gen.createdAt,
       gen.updatedAt,
+      gen.published ? 1 : 0,
+      gen.publishedAt,
     ],
   });
 }
@@ -134,6 +167,8 @@ export async function updateGeneration(
     taskId?: string;
     resultUrls?: string[];
     error?: string | null;
+    published?: boolean;
+    publishedAt?: number | null;
   }
 ): Promise<void> {
   const sets: string[] = [];
@@ -154,6 +189,14 @@ export async function updateGeneration(
     sets.push("error = ?");
     args.push(fields.error);
   }
+  if (fields.published !== undefined) {
+    sets.push("published = ?");
+    args.push(fields.published ? 1 : 0);
+  }
+  if (fields.publishedAt !== undefined) {
+    sets.push("published_at = ?");
+    args.push(fields.publishedAt);
+  }
   if (sets.length === 0) return;
   sets.push("updated_at = ?");
   args.push(Date.now());
@@ -169,6 +212,38 @@ export async function deleteGeneration(id: string): Promise<void> {
     sql: "DELETE FROM generations WHERE id = ?",
     args: [id],
   });
+}
+
+/* ---------- النشر في المعرض العام ---------- */
+
+/** الأعمال المنشورة (الظاهرة للجميع في /gallery) */
+export async function listPublished(limit = 60): Promise<Generation[]> {
+  const rs = await turso.execute({
+    sql: "SELECT * FROM generations WHERE published = 1 AND status = 'success' ORDER BY published_at DESC LIMIT ?",
+    args: [limit],
+  });
+  return rs.rows.map((r) => rowToGeneration(r as unknown as Row));
+}
+
+/** مهام الأوتوبايلوت قيد التنفيذ (params تحتوي "autopilot":true) */
+export async function listActiveAutopilot(limit = 5): Promise<Generation[]> {
+  const rs = await turso.execute({
+    sql: `SELECT * FROM generations
+          WHERE params LIKE '%"autopilot":true%'
+            AND status IN ('pending','waiting','queuing','generating')
+          ORDER BY created_at DESC LIMIT ?`,
+    args: [limit],
+  });
+  return rs.rows.map((r) => rowToGeneration(r as unknown as Row));
+}
+
+/** إجمالي مهام الأوتوبايلوت المنشأة (يُستخدم للدوران على قائمة المواضيع) */
+export async function countAutopilot(): Promise<number> {
+  const rs = await turso.execute({
+    sql: `SELECT COUNT(*) AS c FROM generations WHERE params LIKE '%"autopilot":true%'`,
+  });
+  const row = rs.rows[0] as unknown as Row | undefined;
+  return Number(row?.c ?? 0);
 }
 
 /* ---------- رسائل المحادثة (شات جي بي تي) ---------- */
