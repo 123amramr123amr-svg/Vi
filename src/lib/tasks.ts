@@ -1,4 +1,5 @@
-import { createKieTask, IMAGE_MODEL, VIDEO_MODEL } from "@/lib/kie";
+import { createKieTask } from "@/lib/kie";
+import { getProviderSettings } from "@/lib/settings";
 import {
   ensureSchema,
   getGeneration,
@@ -89,12 +90,13 @@ export async function startGeneration(
     }
   }
 
+  const settings = await getProviderSettings();
   const model =
     opts.extend && parent
       ? EXTEND_MODEL
       : opts.type === "image"
-        ? IMAGE_MODEL
-        : VIDEO_MODEL;
+        ? settings.imageModel
+        : settings.videoModel;
 
   /* ---- بناء مدخلات المزوّد وفق توثيق كل نموذج ---- */
   const imgs = (opts.imageUrls ?? []).map((u) => u.trim()).filter(Boolean);
@@ -173,7 +175,10 @@ export async function startGeneration(
 
   await insertGeneration(gen);
   try {
-    const taskId = await createKieTask(model, input);
+    const taskId = await createKieTask(model, input, {
+      baseUrl: settings.baseUrl,
+      apiKey: settings.apiKey,
+    });
     await updateGeneration(gen.id, { taskId, status: "waiting" });
     return { ...gen, taskId, status: "waiting", updatedAt: Date.now() };
   } catch (err) {

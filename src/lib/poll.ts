@@ -1,4 +1,5 @@
 import { getKieTask } from "@/lib/kie";
+import { getProviderSettings } from "@/lib/settings";
 import { updateGeneration } from "@/lib/turso";
 import {
   isActiveStatus,
@@ -18,7 +19,11 @@ import {
 export async function pollOnce(id: string, row: Generation): Promise<Generation> {
   if (!row.taskId || !isActiveStatus(row.status)) return row;
   try {
-    const task = await getKieTask(row.taskId);
+    const settings = await getProviderSettings();
+    const task = await getKieTask(row.taskId, {
+      baseUrl: settings.baseUrl,
+      apiKey: settings.apiKey,
+    });
     if (task.state === "success") {
       await updateGeneration(id, {
         status: "success",

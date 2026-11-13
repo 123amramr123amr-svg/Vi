@@ -1,5 +1,6 @@
 import { buildAutopilotPlan } from "@/lib/autopilot";
 import { getKieTask } from "@/lib/kie";
+import { getProviderSettings } from "@/lib/settings";
 import { startGeneration } from "@/lib/tasks";
 import {
   countAutopilot,
@@ -48,16 +49,20 @@ export async function runAutopilotStep(
 ): Promise<AutopilotRunResult> {
   await ensureSchema();
 
-  // 1) مسح المهام النشطة: متابعتها لدى kie.ai ونشر ما اكتمل
+  // 1) مسح المهام النشطة: متابعتها لدى المزوّد ونشر ما اكتمل
   const publishedIds: string[] = [];
   const stillActive: string[] = [];
   const active = await listActiveAutopilot(5);
+  const settings = await getProviderSettings();
 
   for (const row of active) {
     let updated: Generation = row;
     if (row.taskId) {
       try {
-        const task = await getKieTask(row.taskId);
+        const task = await getKieTask(row.taskId, {
+          baseUrl: settings.baseUrl,
+          apiKey: settings.apiKey,
+        });
         if (task.state === "success") {
           await updateGeneration(row.id, {
             status: "success",

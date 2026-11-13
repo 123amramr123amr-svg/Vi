@@ -95,6 +95,14 @@ export function ensureSchema(): Promise<void> {
       await turso.execute(
         "CREATE INDEX IF NOT EXISTS idx_chat_messages_created_at ON chat_messages (created_at DESC)"
       );
+      // إعدادات التطبيق (المزوّد/المفتاح/النماذج) — مخزن مفتاح/قيمة
+      await turso.execute(`
+        CREATE TABLE IF NOT EXISTS settings (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL,
+          updated_at INTEGER NOT NULL
+        )
+      `);
     })().catch((err) => {
       schemaPromise = null;
       throw err;
@@ -344,4 +352,33 @@ export async function listChatMessages(limit = 50): Promise<ChatRow[]> {
 
 export async function clearChatMessages(): Promise<void> {
   await turso.execute("DELETE FROM chat_messages");
+}
+
+/* ---------- إعدادات التطبيق (مخزن مفتاح/قيمة) ---------- */
+
+export async function getSettingsMap(): Promise<Record<string, string>> {
+  const rs = await turso.execute("SELECT key, value FROM settings");
+  const map: Record<string, string> = {};
+  for (const r of rs.rows) {
+    const row = r as unknown as Row;
+    const key = row.key as string;
+    const value = row.value as string;
+    if (typeof key === "string" && typeof value === "string") map[key] = value;
+  }
+  return map;
+}
+
+export async function setSetting(key: string, value: string): Promise<void> {
+  await turso.execute({
+    sql: `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+          ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+    args: [key, value, Date.now()],
+  });
+}
+
+export async function deleteSetting(key: string): Promise<void> {
+  await turso.execute({
+    sql: "DELETE FROM settings WHERE key = ?",
+    args: [key],
+  });
 }

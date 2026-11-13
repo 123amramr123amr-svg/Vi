@@ -17,6 +17,7 @@ import {
   Plug,
   RefreshCw,
   Rocket,
+  Settings2,
   Sparkles,
   Trash2,
   Video,
@@ -51,6 +52,7 @@ import { ChatPanel } from "@/components/vi/chat-panel";
 import { GptGuide } from "@/components/vi/gpt-guide";
 import { AutoPublish } from "@/components/vi/auto-publish";
 import { McpGuide } from "@/components/vi/mcp-guide";
+import { SettingsPanel } from "@/components/vi/settings-panel";
 import { useToast } from "@/hooks/use-toast";
 import {
   IMAGE_ASPECT_RATIOS,
@@ -83,6 +85,34 @@ export function Studio() {
   const [loadingHistory, setLoadingHistory] = useState(true);
   const [elapsed, setElapsed] = useState(0);
   const [tab, setTab] = useState("studio");
+
+  /* ----- تسميات النماذج الفعالة (من إعدادات المزوّد — تبويب الإعدادات) ----- */
+  const [modelLabels, setModelLabels] = useState({
+    image: IMAGE_MODEL_LABEL,
+    video: VIDEO_MODEL_LABEL,
+  });
+
+  const loadModelLabels = useCallback(async () => {
+    try {
+      const res = await fetch("/api/settings", { cache: "no-store" });
+      if (!res.ok) return;
+      const data = (await res.json()) as {
+        settings?: { imageModel: string; videoModel: string };
+      };
+      if (data.settings?.imageModel && data.settings?.videoModel) {
+        setModelLabels({
+          image: data.settings.imageModel,
+          video: data.settings.videoModel,
+        });
+      }
+    } catch {
+      /* عابر */
+    }
+  }, []);
+
+  useEffect(() => {
+    loadModelLabels();
+  }, [loadModelLabels]);
 
   /* ----- حالة تكملة الفيديو (سلسلة أجزاء) ----- */
   const [continueFrom, setContinueFrom] = useState<Generation | null>(null);
@@ -312,7 +342,7 @@ export function Studio() {
         id: data.id,
         taskId: data.taskId ?? null,
         type,
-        model: type === "image" ? IMAGE_MODEL_LABEL : VIDEO_MODEL_LABEL,
+        model: type === "image" ? modelLabels.image : modelLabels.video,
         prompt: trimmed,
         params:
           type === "image"
@@ -449,7 +479,7 @@ export function Studio() {
 
       <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 lg:py-10">
         <Tabs value={tab} onValueChange={(v) => setTab(v)}>
-          <TabsList className="mx-auto mb-6 grid w-full max-w-3xl grid-cols-3 sm:grid-cols-5">
+          <TabsList className="mx-auto mb-6 grid w-full max-w-3xl grid-cols-3 sm:grid-cols-6">
             <TabsTrigger value="studio" className="gap-1.5">
               <ImageIcon className="h-4 w-4" />
               الاستوديو
@@ -469,6 +499,10 @@ export function Studio() {
             <TabsTrigger value="mcp" className="gap-1.5">
               <Plug className="h-4 w-4" />
               MCP
+            </TabsTrigger>
+            <TabsTrigger value="settings" className="gap-1.5">
+              <Settings2 className="h-4 w-4" />
+              الإعدادات
             </TabsTrigger>
           </TabsList>
           <TabsContent value="studio" className="mt-0">
@@ -711,7 +745,7 @@ export function Studio() {
               <p className="text-center text-[11px] leading-5 text-muted-foreground">
                 النموذج المستخدم:{" "}
                 <span className="font-mono" dir="ltr">
-                  {type === "image" ? IMAGE_MODEL_LABEL : VIDEO_MODEL_LABEL}
+                  {type === "image" ? modelLabels.image : modelLabels.video}
                 </span>
               </p>
             </CardContent>
@@ -824,6 +858,9 @@ export function Studio() {
           </TabsContent>
           <TabsContent value="mcp" className="mt-0">
             <McpGuide />
+          </TabsContent>
+          <TabsContent value="settings" className="mt-0">
+            <SettingsPanel onSaved={loadModelLabels} />
           </TabsContent>
         </Tabs>
       </main>
