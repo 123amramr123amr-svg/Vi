@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { modelsEndpoints, providerHeaders } from "@/lib/provider";
 import { getProviderSettings, normalizeBaseUrl } from "@/lib/settings";
 
 export const dynamic = "force-dynamic";
@@ -75,7 +76,10 @@ export async function POST(req: NextRequest) {
       baseUrl = normalizeBaseUrl(rawBase ?? settings.baseUrl);
     } catch {
       return NextResponse.json(
-        { error: "رابط الخدمة غير صالح — مثال صحيح: https://api.kie.ai" },
+        {
+          error:
+            "رابط الخدمة غير صالح — مثال: https://api.kie.ai أو https://openrouter.ai/api/v1",
+        },
         { status: 400 }
       );
     }
@@ -90,22 +94,15 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    /* نجرب المسارات الشائعة: نمط kie ثم نمط OpenAI ثم المسار العام */
-    const endpoints = [
-      `${baseUrl}/api/v1/models`,
-      `${baseUrl}/v1/models`,
-      `${baseUrl}/models`,
-    ];
+    /* مرشّحات تُشتق حسب شكل الرابط (مع مسار أو بدونه) — نمط OpenAI ثم kie ثم العام */
+    const endpoints = modelsEndpoints(baseUrl);
 
     const tried: Array<{ endpoint: string; error: string }> = [];
 
     for (const endpoint of endpoints) {
       try {
         const res = await fetch(endpoint, {
-          headers: {
-            Authorization: `Bearer ${apiKey}`,
-            "Content-Type": "application/json",
-          },
+          headers: providerHeaders(apiKey),
           cache: "no-store",
           signal: AbortSignal.timeout(20_000),
         });

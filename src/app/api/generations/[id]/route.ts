@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { waitForGeneration } from "@/lib/poll";
+import { absolutizeUrls, requestOrigin } from "@/lib/http";
 import { deleteGeneration, ensureSchema, getGeneration } from "@/lib/turso";
 
 export const dynamic = "force-dynamic";
@@ -35,7 +36,13 @@ export async function GET(
 
   const item = await waitForGeneration({ row, waitSeconds });
 
-  return NextResponse.json({ item });
+  /* الروابط الداخلية (بروكسي الوسائط) تُحول لمطلقة لصلاحيتها للعملاء الخارجيين */
+  const itemOut = {
+    ...item,
+    resultUrls: absolutizeUrls(item.resultUrls, requestOrigin(req)),
+  };
+
+  return NextResponse.json({ item: itemOut });
 }
 
 /** DELETE /api/generations/[id] — حذف عنصر من السجل */

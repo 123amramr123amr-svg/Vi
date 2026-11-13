@@ -527,24 +527,34 @@ export function SettingsPanel({ onSaved }: { onSaved?: () => void }) {
             تغيير الرابط والمفتاح والنماذج
           </CardTitle>
           <p className="text-sm leading-6 text-muted-foreground">
-            أدخل رابط الخدمة والمفتاح الجديد ثم اضغط «جلب النماذج» لتظهر لك
-            قائمة النماذج المرتبطة بالمفتاح، اختر منها نموذج الصور ونموذج
-            الفيديو واحفظ. الرابط يجب أن يكون متوافقًا مع واجهة المهام
-            (المسار <span dir="ltr" className="font-mono">/api/v1/jobs/createTask</span> —
-            مثل <span dir="ltr" className="font-mono">https://api.kie.ai</span>).
+            أدخل أي رابط لأي مفتاح ثم اضغط «جلب النماذج» لتظهر لك قائمة
+            النماذج المرتبطة بالمفتاح، اختر منها نموذج الصور ونموذج الفيديو
+            واحفظ. الرابط يمكن أن يكون دومينًا فقط مثل{" "}
+            <span dir="ltr" className="font-mono">https://api.kie.ai</span>{" "}
+            أو رابطًا كاملًا بمسار مثل{" "}
+            <span dir="ltr" className="font-mono">https://openrouter.ai/api/v1</span> —
+            التطبيق يجرّب تلقائيًا واجهة المهام (نمط kie.ai) ثم الواجهة
+            المتوافقة مع OpenAI، ويشتغل مع أي مزوّد منهما.
           </p>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="provider-base-url">رابط الخدمة (Base URL)</Label>
+            <Label htmlFor="provider-base-url">رابط الخدمة (Base URL) — أي رابط لأي مفتاح</Label>
             <Input
               id="provider-base-url"
               dir="ltr"
-              placeholder="https://api.kie.ai"
+              placeholder="https://api.kie.ai أو https://openrouter.ai/api/v1"
               value={baseUrlDraft}
               onChange={(e) => setBaseUrlDraft(e.target.value)}
               className="font-mono text-sm"
             />
+            <p className="text-xs leading-5 text-muted-foreground">
+              أمثلة:{" "}
+              <span dir="ltr" className="font-mono">https://api.kie.ai</span> •{" "}
+              <span dir="ltr" className="font-mono">https://api.openai.com/v1</span> •{" "}
+              <span dir="ltr" className="font-mono">https://openrouter.ai/api/v1</span> •{" "}
+              أي بوابة خاصة بنفس الأسلوب — بمسار أو بدونه.
+            </p>
           </div>
 
           <div className="space-y-2">
@@ -564,8 +574,8 @@ export function SettingsPanel({ onSaved }: { onSaved?: () => void }) {
               autoComplete="off"
             />
             <p className="text-xs leading-5 text-muted-foreground">
-              يُخزَّن في قاعدة بياناتك ويظهر للخادم فقط (لا يُعرض كاملًا مطلقًا).
-              للحصول على مفتاح kie.ai جديد:{" "}
+              مفتاح أي مزوّد تستخدمه — يُخزَّن في قاعدة بياناتك ويظهر للخادم
+              فقط (لا يُعرض كاملًا مطلقًا). للحصول على مفتاح kie.ai جديد:{" "}
               <a
                 href="https://kie.ai/api-key"
                 target="_blank"

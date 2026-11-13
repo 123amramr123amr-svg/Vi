@@ -35,14 +35,8 @@ export interface ProviderSettings {
   videoModelCustom: boolean;
 }
 
-/* ------- ذاكرة تخزين مؤقت قصيرة (3 ثوانٍ) لتخفيف الاستعلامات أثناء الاستقصاء ------- */
-
-let cache: { value: ProviderSettings; at: number } | null = null;
-const CACHE_MS = 3000;
-
-export function invalidateSettingsCache(): void {
-  cache = null;
-}
+/* ملاحظة: لا كاش هنا عن قصد — تغيير الإعدادات يجب أن يسري فورًا على أي طلب
+ * تالٍ حتى لو خدم عملية خادم مختلفة الطلبين (استعلام واحد سريع على قاعدة البيانات) */
 
 function maskKey(key: string): string {
   const trimmed = key.trim();
@@ -75,14 +69,11 @@ function buildFromMap(map: Record<string, string>): ProviderSettings {
   };
 }
 
-/** قراءة الإعدادات الفعالة (قاعدة البيانات ثم البيئة ثم الافتراضي) */
+/** قراءة الإعدادات الفعالة (قاعدة البيانات ثم البيئة ثم الافتراضي) — دائمًا مباشرة من القاعدة */
 export async function getProviderSettings(): Promise<ProviderSettings> {
-  if (cache && Date.now() - cache.at < CACHE_MS) return cache.value;
   await ensureSchema();
   const map = await getSettingsMap();
-  const value = buildFromMap(map);
-  cache = { value, at: Date.now() };
-  return value;
+  return buildFromMap(map);
 }
 
 export interface SaveSettingsPatch {
@@ -115,7 +106,6 @@ export async function saveProviderSettings(
   if (patch.videoModel !== undefined && patch.videoModel.trim()) {
     await setSetting(KEY_VIDEO_MODEL, patch.videoModel.trim());
   }
-  invalidateSettingsCache();
   return getProviderSettings();
 }
 
@@ -130,21 +120,41 @@ export async function resetProviderSettings(): Promise<ProviderSettings> {
   ]) {
     await deleteSetting(key);
   }
-  invalidateSettingsCache();
   return getProviderSettings();
 }
 
-/** تطبيع رابط الخدمة: إزالة الشرطة المائلة النهائية ومسارات المهام الزائدة */
+/**
+ * تطبيع رابط الخدمة: تنظيف الشرطات الزائدة دون حذف المسار —
+ * يُقبل أي رابط لأي مزوّد، بما فيه الروابط التي تحتوي مسار API مثل:
+ * - https://api.kie.ai (بدون مسار)
+ * - https://openrouter.ai/api/v1
+ * - https://api.openai.com/v1
+ * - بوابة خاصة مثل https://my-server.com/llm
+ * وإذا لصق المستخدم رابط نقطة نهاية كاملة نقتطف منه الجزء الأساسي.
+ */
 export function normalizeBaseUrl(raw: string): string {
   let s = raw.trim().replace(/\/+$/, "");
   if (!/^https?:\/\//i.test(s)) s = `https://${s}`;
-  // لو لصق المستخدم رابطًا يتضمن مسار المهام نقتطف الجزء الأساسي
-  s = s.replace(/\/api\/v1\/jobs.*$/i, "").replace(/\/api\/v1$/i, "");
+  // اقتطاع نقطة النهاية إذا لصق المستخدم رابطًا كاملًا لمهمة/قائمة
+  s = s
+    .replace(/\/api\/v1\/jobs.*$/i, "")
+    .replace(/\/v1\/jobs.*$/i, "")
+    .replace(/\/images\/generations.*$/i, "")
+    .replace(/\/chat\/completions.*$/i, "")
+    .replace(/\/models.*$/i, "")
+    .replace(/\/videos.*$/i, "")
+    .replace(/\/+$/, "");
   try {
     const u = new URL(s);
-    return `${u.protocol}//${u.host}`;
+    if (u.protocol !== "http:" && u.protocol !== "https:") {
+      throw new Error("بروتوكول غير مدعوم");
+    }
+    // نحافظ على المسار كما هو — مهم للمزوّدين الذين يخدمون API تحت مسار
+    return `${u.protocol}//${u.host}${u.pathname.replace(/\/+$/, "")}`;
   } catch {
-    throw new Error("رابط الخدمة غير صالح — مثال صحيح: https://api.kie.ai");
+    throw new Error(
+      "رابط الخدمة غير صالح — مثال: https://api.kie.ai أو https://openrouter.ai/api/v1"
+    );
   }
 }
 

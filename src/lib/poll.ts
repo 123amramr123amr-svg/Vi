@@ -1,4 +1,4 @@
-import { getKieTask } from "@/lib/kie";
+import { getRemoteTaskState, type ProviderSnapshot } from "@/lib/provider";
 import { getProviderSettings } from "@/lib/settings";
 import { updateGeneration } from "@/lib/turso";
 import {
@@ -8,22 +8,27 @@ import {
 } from "@/lib/types";
 
 /**
- * متابعة حالة المهام لدى kie.ai وتحديث قاعدة البيانات —
- * مشتركة بين GET /api/generations/[id] وأدوات MCP.
+ * متابعة حالة المهام لدى المزوّد المُختار في الإعدادات (أي رابط لأي مفتاح) وتحديث قاعدة البيانات —
+ * مشتركة بين GET /api/generations/[id] وأدوات MCP والأوتوبايلوت.
+ * تُستعلم كل مهمة عن المزوّد الذي أُنشئت به (لقطة محفوظة في params.provider)،
+ * والمهام القديمة (قبل اللقطات) تُستعلم عبر مرشّحات واجهة المهام للرابط الحالي.
  */
 
 /**
- * استعلام واحد عن حالة المهمة لدى kie.ai مع تحديث قاعدة البيانات.
+ * استعلام واحد عن حالة المهمة لدى المزوّد مع تحديث قاعدة البيانات.
  * يعيد الصف بعد التحديث (أو كما هو إذا فشل الاستعلام العابر).
  */
 export async function pollOnce(id: string, row: Generation): Promise<Generation> {
   if (!row.taskId || !isActiveStatus(row.status)) return row;
   try {
     const settings = await getProviderSettings();
-    const task = await getKieTask(row.taskId, {
-      baseUrl: settings.baseUrl,
-      apiKey: settings.apiKey,
-    });
+    const snapshot: ProviderSnapshot | null = row.params.provider ?? null;
+    const task = await getRemoteTaskState(
+      row.taskId,
+      snapshot,
+      { baseUrl: settings.baseUrl, apiKey: settings.apiKey },
+      id
+    );
     if (task.state === "success") {
       await updateGeneration(id, {
         status: "success",

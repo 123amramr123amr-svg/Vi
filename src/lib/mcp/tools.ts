@@ -308,6 +308,19 @@ function parseArgs<T extends z.ZodType>(
   return parsed.data;
 }
 
+/** أصل الطلب الحالي (مثل https://app.vercel.app) لتحويل الروابط الداخلية لمطلقة */
+let resultOrigin: string | null = null;
+
+/** يُستدعى من مسار MCP لكل طلب — يجعل روابط /api/media مطلقة للعملاء الخارجيين */
+export function setResultOrigin(origin: string | null): void {
+  resultOrigin = origin;
+}
+
+function absolutize(url: string): string {
+  if (!resultOrigin || !url.startsWith("/")) return url;
+  return `${resultOrigin}${url}`;
+}
+
 function serializeGeneration(row: Generation): Record<string, unknown> {
   return {
     id: row.id,
@@ -318,7 +331,7 @@ function serializeGeneration(row: Generation): Record<string, unknown> {
     prompt:
       row.prompt.length > 300 ? `${row.prompt.slice(0, 300)}…` : row.prompt,
     params: row.params,
-    resultUrls: row.resultUrls,
+    resultUrls: row.resultUrls.map(absolutize),
     error: row.error,
     published: row.published,
     parentId: row.parentId,

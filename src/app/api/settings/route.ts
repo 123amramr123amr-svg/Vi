@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
 const putBody = z.object({
-  /** رابط خدمة التوليد — مثال: https://api.kie.ai */
+  /** رابط خدمة التوليد — أي رابط لأي مزوّد، مثال: https://api.kie.ai أو https://openrouter.ai/api/v1 */
   baseUrl: z.string().min(4).max(300).optional(),
   /** مفتاح API جديد — غيابه أو null يعني عدم تغيير المفتاح الحالي */
   apiKey: z.string().max(400).nullable().optional(),

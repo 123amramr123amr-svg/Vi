@@ -21,6 +21,16 @@ export interface GenerationParams {
   imageUrls?: string[];
   /** ثانية بداية التكملة داخل الفيديو الأصلي عند استخدام التمديد التلقائي */
   extendAt?: number;
+  /**
+   * لقطة المزوّد الذي أُنشئت بها المهمة (نوع الواجهة + الرابط + جذرها) —
+   * تضمن متابعة المهمة لدى المزوّد نفسه حتى لو غُيّرت الإعدادات لاحقًا
+   * (مثال: { kind: "jobs", baseUrl: "https://api.kie.ai", prefix: "https://api.kie.ai/api/v1/jobs" })
+   */
+  provider?: {
+    kind: "jobs" | "openai-image" | "openai-video";
+    baseUrl: string;
+    prefix: string;
+  };
 }
 
 export interface Generation {

@@ -1,6 +1,5 @@
 import { buildAutopilotPlan } from "@/lib/autopilot";
-import { getKieTask } from "@/lib/kie";
-import { getProviderSettings } from "@/lib/settings";
+import { pollOnce } from "@/lib/poll";
 import { startGeneration } from "@/lib/tasks";
 import {
   countAutopilot,
@@ -49,41 +48,24 @@ export async function runAutopilotStep(
 ): Promise<AutopilotRunResult> {
   await ensureSchema();
 
-  // 1) مسح المهام النشطة: متابعتها لدى المزوّد ونشر ما اكتمل
+  // 1) مسح المهام النشطة: متابعتها لدى المزوّد (وفق لقطة كل مهمة) ونشر ما اكتمل
   const publishedIds: string[] = [];
   const stillActive: string[] = [];
   const active = await listActiveAutopilot(5);
-  const settings = await getProviderSettings();
 
   for (const row of active) {
     let updated: Generation = row;
     if (row.taskId) {
       try {
-        const task = await getKieTask(row.taskId, {
-          baseUrl: settings.baseUrl,
-          apiKey: settings.apiKey,
-        });
-        if (task.state === "success") {
+        updated = await pollOnce(row.id, row);
+        if (updated.status === "success" && updated.resultUrls.length > 0) {
+          // النشر التلقائي الفوري في المعرض العام
           await updateGeneration(row.id, {
-            status: "success",
-            resultUrls: task.resultUrls,
-            // النشر التلقائي الفوري في المعرض العام
             published: true,
             publishedAt: Date.now(),
           });
           publishedIds.push(row.id);
-          updated = { ...row, status: "success", published: true };
-        } else if (task.state === "fail") {
-          await updateGeneration(row.id, {
-            status: "fail",
-            error: task.failMsg ?? "فشل التوليد",
-          });
-          updated = { ...row, status: "fail" };
-        } else if (task.state !== row.status) {
-          await updateGeneration(row.id, {
-            status: task.state as Generation["status"],
-          });
-          updated = { ...row, status: task.state as Generation["status"] };
+          updated = { ...updated, published: true };
         }
       } catch (err) {
         console.error("[vi] autopilot poll failed:", err);

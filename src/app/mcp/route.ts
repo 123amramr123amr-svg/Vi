@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { handleRpcMessage } from "@/lib/mcp/protocol";
-import { callTool } from "@/lib/mcp/tools";
+import { callTool, setResultOrigin } from "@/lib/mcp/tools";
 import type { JsonRpcResponse } from "@/lib/mcp/types";
 import { ensureSchema } from "@/lib/turso";
 
@@ -53,6 +53,16 @@ export async function POST(req: NextRequest) {
     );
   }
   await ensureSchema();
+
+  /* أصل الطلب — يجعل روابط /api/media مطلقة في ردود MCP للعملاء الخارجيين */
+  const host =
+    req.headers.get("x-forwarded-host") ?? req.headers.get("host") ?? null;
+  if (host) {
+    const proto =
+      req.headers.get("x-forwarded-proto")?.split(",")[0]?.trim() ||
+      (host.includes("localhost") || host.startsWith("127.") ? "http" : "https");
+    setResultOrigin(`${proto}://${host}`);
+  }
 
   const raw = await req.text();
   let body: unknown;

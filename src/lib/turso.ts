@@ -191,12 +191,13 @@ export async function updateGeneration(
   id: string,
   fields: {
     status?: GenerationStatus;
-    taskId?: string;
+    taskId?: string | null;
     resultUrls?: string[];
     error?: string | null;
     published?: boolean;
     publishedAt?: number | null;
     partNumber?: number | null;
+    params?: GenerationParams;
   }
 ): Promise<void> {
   const sets: string[] = [];
@@ -212,6 +213,10 @@ export async function updateGeneration(
   if (fields.resultUrls !== undefined) {
     sets.push("result_urls = ?");
     args.push(JSON.stringify(fields.resultUrls));
+  }
+  if (fields.params !== undefined) {
+    sets.push("params = ?");
+    args.push(JSON.stringify(fields.params));
   }
   if (fields.error !== undefined) {
     sets.push("error = ?");

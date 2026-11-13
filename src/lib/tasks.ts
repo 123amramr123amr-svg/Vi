@@ -1,4 +1,4 @@
-import { createKieTask } from "@/lib/kie";
+import { createGenerationTask, type ProviderSnapshot } from "@/lib/provider";
 import { getProviderSettings } from "@/lib/settings";
 import {
   ensureSchema,
@@ -139,6 +139,16 @@ export async function startGeneration(
     }
   }
 
+  /* ---- مقاسات الواجهة المتوافقة مع OpenAI (إن احتاجها المزوّد) ---- */
+  const openaiImageSize = mapOpenaiImageSize(aspectRatio);
+  const openaiVideoSpec = opts.extend
+    ? undefined
+    : {
+        seconds: String(opts.duration ?? 8),
+        size: mapOpenaiVideoSize(aspectRatio, resolution),
+        ...(imgs.length > 0 ? { imageUrl: imgs[0] } : {}),
+      };
+
   const now = Date.now();
   const gen: Generation = {
     id: crypto.randomUUID(),
@@ -175,12 +185,58 @@ export async function startGeneration(
 
   await insertGeneration(gen);
   try {
-    const taskId = await createKieTask(model, input, {
-      baseUrl: settings.baseUrl,
-      apiKey: settings.apiKey,
+    /* إنشاء المهمة: واجهة المهام (نمط kie) أولًا ثم المتوافق مع OpenAI */
+    const created = await createGenerationTask({
+      type: opts.type,
+      model,
+      input,
+      prompt: opts.prompt,
+      cfg: { baseUrl: settings.baseUrl, apiKey: settings.apiKey },
+      jobsOnly: Boolean(opts.extend && parent),
+      ...(opts.type === "image" ? { openaiImageSize } : { openaiVideo: openaiVideoSpec }),
     });
-    await updateGeneration(gen.id, { taskId, status: "waiting" });
-    return { ...gen, taskId, status: "waiting", updatedAt: Date.now() };
+
+    /* لقطة المزوّد تُحفظ مع المهمة حتى يستعلام الاستمرار لدى نفس المزوّد الذي أُنشئت به */
+    const snapshot: ProviderSnapshot = {
+      kind: created.kind,
+      baseUrl: settings.baseUrl,
+      prefix: created.prefix,
+    };
+    const finalParams = { ...gen.params, provider: snapshot };
+
+    if (created.immediateUrls.length > 0) {
+      // واجهة متزامنة (مثل /images/generations) — النتيجة جاهزة فورًا
+      await updateGeneration(gen.id, {
+        taskId: created.taskId,
+        status: "success",
+        resultUrls: created.immediateUrls,
+        params: finalParams,
+      });
+      return {
+        ...gen,
+        taskId: created.taskId,
+        status: "success",
+        resultUrls: created.immediateUrls,
+        params: finalParams,
+        updatedAt: Date.now(),
+      };
+    }
+
+    if (!created.taskId) {
+      throw new Error("لم يُرجع المزوّد معرّف المهمة");
+    }
+    await updateGeneration(gen.id, {
+      taskId: created.taskId,
+      status: "waiting",
+      params: finalParams,
+    });
+    return {
+      ...gen,
+      taskId: created.taskId,
+      status: "waiting",
+      params: finalParams,
+      updatedAt: Date.now(),
+    };
   } catch (err) {
     const message =
       err instanceof Error
@@ -193,4 +249,46 @@ export async function startGeneration(
     }
     throw new Error(message);
   }
+}
+
+/* ------- مقاسات الواجهة المتوافقة مع OpenAI ------- */
+
+/** تحويل نسبة الأبعاد إلى مقاس صورة تقريبي (نمط gpt-image) */
+function mapOpenaiImageSize(aspectRatio?: string): string {
+  switch (aspectRatio) {
+    case "16:9":
+    case "3:2":
+    case "4:3":
+    case "21:9":
+    case "2:1":
+    case "5:4":
+    case "3:1":
+      return "1536x1024";
+    case "9:16":
+    case "2:3":
+    case "3:4":
+    case "4:5":
+    case "1:2":
+    case "9:21":
+    case "1:3":
+      return "1024x1536";
+    default:
+      return "1024x1024";
+  }
+}
+
+/** تحويل نسبة الأبعاد والدقة إلى مقاس فيديو تقريبي (نمط Sora) */
+function mapOpenaiVideoSize(aspectRatio?: string, resolution?: string): string {
+  const portrait = aspectRatio === "9:16" || aspectRatio === "2:3" || aspectRatio === "3:4";
+  const square = aspectRatio === "1:1";
+  const res = resolution === "1080p" ? 1080 : resolution === "480p" ? 480 : 720;
+  if (square) {
+    const s = res === 1080 ? 1024 : 720;
+    return `${s}x${s}`;
+  }
+  const h = res;
+  const w = portrait
+    ? Math.round((res * 9) / 16 / 2) * 2
+    : Math.round((res * 16) / 9 / 2) * 2;
+  return portrait ? `${h}x${w}` : `${w}x${h}`;
 }
