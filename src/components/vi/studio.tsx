@@ -5,18 +5,18 @@ import { formatDistanceToNow } from "date-fns";
 import { ar } from "date-fns/locale";
 import {
   AlertTriangle,
-  Bot,
+  Check,
   Clapperboard,
   Copy,
   Download,
+  Film,
   Globe,
   Image as ImageIcon,
   ImagePlus,
-  Link2,
   Loader2,
+  Merge,
   Plug,
   RefreshCw,
-  Rocket,
   Settings2,
   Sparkles,
   Trash2,
@@ -43,14 +43,7 @@ import {
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  ToggleGroup,
-  ToggleGroupItem,
-} from "@/components/ui/toggle-group";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ChatPanel } from "@/components/vi/chat-panel";
-import { GptGuide } from "@/components/vi/gpt-guide";
-import { AutoPublish } from "@/components/vi/auto-publish";
 import { McpGuide } from "@/components/vi/mcp-guide";
 import { SettingsPanel } from "@/components/vi/settings-panel";
 import { useToast } from "@/hooks/use-toast";
@@ -64,14 +57,18 @@ import {
   type Generation,
   type GenerationType,
   type GenerationStatus,
+  type MergeJob,
 } from "@/lib/types";
 
 const IMAGE_MODEL_LABEL = "gpt-image-2-6/flare-text-to-image";
 const VIDEO_MODEL_LABEL = "grok-imagine-video-1-5-preview";
 
+type StudioTab = "images" | "videos" | "mcp" | "settings";
+
 export function Studio() {
   const { toast } = useToast();
 
+  const [tab, setTab] = useState<StudioTab>("images");
   const [type, setType] = useState<GenerationType>("image");
   const [prompt, setPrompt] = useState("");
   const [aspect, setAspect] = useState<string>("auto");
@@ -84,7 +81,6 @@ export function Studio() {
   const [history, setHistory] = useState<Generation[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(true);
   const [elapsed, setElapsed] = useState(0);
-  const [tab, setTab] = useState("studio");
 
   /* ----- تسميات النماذج الفعالة (من إعدادات المزوّد — تبويب الإعدادات) ----- */
   const [modelLabels, setModelLabels] = useState({
@@ -120,6 +116,11 @@ export function Studio() {
   const [uploaded, setUploaded] = useState<Array<{ url: string; preview: string }>>([]);
   const [uploading, setUploading] = useState(false);
 
+  /* ----- حالة دمج الفيديوهات ----- */
+  const [mergeSel, setMergeSel] = useState<string[]>([]);
+  const [merges, setMerges] = useState<MergeJob[]>([]);
+  const [merging, setMerging] = useState(false);
+
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startedAtRef = useRef<number>(Date.now());
 
@@ -152,6 +153,18 @@ export function Studio() {
       /* تجاهل — السجل غير حرج */
     } finally {
       setLoadingHistory(false);
+    }
+  }, []);
+
+  const loadMerges = useCallback(async () => {
+    try {
+      const res = await fetch("/api/merge", { cache: "no-store" });
+      if (res.ok) {
+        const data = (await res.json()) as { items?: MergeJob[] };
+        setMerges(data.items ?? []);
+      }
+    } catch {
+      /* تجاهل — قائمة الدمج غير حرجة */
     }
   }, []);
 
@@ -195,8 +208,9 @@ export function Studio() {
 
   useEffect(() => {
     loadHistory();
+    loadMerges();
     return () => stopPolling();
-  }, [loadHistory, stopPolling]);
+  }, [loadHistory, loadMerges, stopPolling]);
 
   const currentId = current?.id;
   const currentStatus = current?.status;
@@ -209,13 +223,22 @@ export function Studio() {
     return () => clearInterval(timer);
   }, [currentId, currentStatus]);
 
-  function handleTypeChange(value: string) {
-    if (!value || value === type) return;
-    if (continueFrom) cancelContinue();
-    const next = value as GenerationType;
-    setType(next);
-    setAspect("auto");
-    setResolution(next === "image" ? "1K" : "720p");
+  /** تغيير التبويب — كل تبويب إنشاء يضبط نوع التوليد المناسب له */
+  function handleTabChange(value: string) {
+    if (!value || value === tab) return;
+    const next = value as StudioTab;
+    setTab(next);
+    if (next === "images" && type !== "image") {
+      if (continueFrom) cancelContinue();
+      setType("image");
+      setAspect("auto");
+      setResolution("1K");
+    }
+    if (next === "videos" && type !== "video") {
+      setType("video");
+      setAspect("auto");
+      setResolution("720p");
+    }
   }
 
   /* ----- تكملة الفيديو (سلسلة أجزاء) ----- */
@@ -240,7 +263,7 @@ export function Studio() {
     );
     setDuration(typeof p.duration === "number" ? Math.min(15, Math.max(1, p.duration)) : 15);
     setEnableAudio(p.enableAudio ?? true);
-    setTab("studio");
+    setTab("videos");
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -386,22 +409,94 @@ export function Studio() {
     }
   }
 
-  function openResultFromChat(item: Generation) {
-    setCurrent(item);
-    setTab("studio");
-    if (isActiveStatus(item.status)) {
-      startPolling(item.id);
-    } else {
-      stopPolling();
-    }
-  }
-
   async function deleteItem(id: string) {
     setHistory((prev) => prev.filter((x) => x.id !== id));
+    setMergeSel((prev) => prev.filter((x) => x !== id));
     if (currentId === id) setCurrent(null);
     try {
       await fetch(`/api/generations/${id}`, { method: "DELETE" });
       toast({ title: "تم الحذف من السجل" });
+    } catch {
+      toast({ title: "تعذر الحذف", variant: "destructive" });
+    }
+  }
+
+  /* ----- دمج الفيديوهات ----- */
+
+  function toggleMergeSelect(id: string) {
+    setMergeSel((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  }
+
+  async function submitMerge() {
+    if (mergeSel.length < 2 || merging) return;
+    setMerging(true);
+    try {
+      const res = await fetch("/api/merge", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ generationIds: mergeSel }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        id?: string;
+        error?: string;
+      };
+      if (!res.ok || !data.id) {
+        throw new Error(data.error ?? "تعذر إنشاء وظيفة الدمج");
+      }
+      setMergeSel([]);
+      toast({
+        title: "بدأ دمج الفيديوهات…",
+        description: "يُدمج المقاطع المحددة الآن في مقطع واحد — النتيجة ستظهر بالأسفل.",
+      });
+
+      const id = data.id;
+      const deadline = Date.now() + 150_000;
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 3000));
+        try {
+          const r2 = await fetch(`/api/merge/${id}`, { cache: "no-store" });
+          if (!r2.ok) continue;
+          const d2 = (await r2.json().catch(() => ({}))) as { item?: MergeJob };
+          const item = d2.item;
+          if (item && item.status !== "processing") {
+            await loadMerges();
+            if (item.status === "success") {
+              toast({
+                title: "اكتمل الدمج ✅",
+                description: "الفيديو المدمج جاهز للعرض والتحميل بالأسفل.",
+              });
+            } else {
+              toast({
+                title: "فشل الدمج",
+                description: item.error ?? "حاول مرة أخرى",
+                variant: "destructive",
+              });
+            }
+            return;
+          }
+        } catch {
+          /* عابر — نكمل الانتظار */
+        }
+      }
+      await loadMerges();
+    } catch (err) {
+      toast({
+        title: "خطأ في الدمج",
+        description: err instanceof Error ? err.message : "حاول مرة أخرى",
+        variant: "destructive",
+      });
+    } finally {
+      setMerging(false);
+    }
+  }
+
+  async function deleteMergeItem(id: string) {
+    setMerges((prev) => prev.filter((m) => m.id !== id));
+    try {
+      await fetch(`/api/merge/${id}`, { method: "DELETE" });
+      toast({ title: "حُذف الفيديو المدمج" });
     } catch {
       toast({ title: "تعذر الحذف", variant: "destructive" });
     }
@@ -450,6 +545,411 @@ export function Studio() {
   }
 
   const currentActive = current ? isActiveStatus(current.status) : false;
+  const imageHistory = history.filter((h) => h.type === "image");
+  const videoHistory = history.filter((h) => h.type === "video");
+
+  /* لوحة الإنشاء المشتركة — تُعرض في تبويب الصور وتبويب الفيديوهات */
+  const createPanel = (
+    <Card className="border-border/70 shadow-xl shadow-black/10 lg:sticky lg:top-24">
+      <CardContent className="space-y-5 p-5">
+        {continuing && continueFrom && (
+          <div className="space-y-3 rounded-xl border border-fuchsia-500/40 bg-fuchsia-500/10 p-4">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <p className="flex items-center gap-1.5 text-sm font-extrabold text-fuchsia-300">
+                  <Video className="h-4 w-4 shrink-0" />
+                  تكملة الفيديو — الجزء الجديد سيصبح رقم {nextPartNumber}
+                </p>
+                <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
+                  {continueFrom.prompt}
+                </p>
+              </div>
+              <button
+                onClick={cancelContinue}
+                aria-label="إلغاء التكملة والرجوع لإنشاء فيديو مستقل"
+                className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-black/30 text-muted-foreground transition hover:bg-red-600 hover:text-white"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="grid w-full grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setContinueMode("images")}
+                aria-pressed={continueMode === "images"}
+                className={`flex h-9 items-center justify-center gap-1.5 rounded-lg border text-xs transition ${
+                  continueMode === "images"
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : "border-border text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <ImagePlus className="h-3.5 w-3.5" /> من صور الجزء الجديد
+              </button>
+              <button
+                type="button"
+                onClick={() => setContinueMode("extend")}
+                aria-pressed={continueMode === "extend"}
+                className={`flex h-9 items-center justify-center gap-1.5 rounded-lg border text-xs transition ${
+                  continueMode === "extend"
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : "border-border text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <Clapperboard className="h-3.5 w-3.5" /> تكملة تلقائية من النهاية
+              </button>
+            </div>
+
+            {continueMode === "images" ? (
+              <div className="space-y-2">
+                <div className="flex flex-wrap gap-2">
+                  {uploaded.map((img, i) => (
+                    <div
+                      key={img.url}
+                      className="relative h-16 w-16 overflow-hidden rounded-lg border border-border"
+                    >
+                      {/* معاينة محلية من جهاز المستخدم */}
+                      <img
+                        src={img.preview}
+                        alt={`صورة الجزء ${i + 1}`}
+                        className="h-full w-full object-cover"
+                      />
+                      <button
+                        onClick={() =>
+                          setUploaded((prev) => prev.filter((x) => x.url !== img.url))
+                        }
+                        aria-label="إزالة الصورة"
+                        className="absolute end-0.5 top-0.5 grid h-5 w-5 place-items-center rounded-md bg-black/60 text-white transition hover:bg-red-600"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                  ))}
+                  {uploaded.length < 3 && (
+                    <label className="grid h-16 w-16 cursor-pointer place-items-center rounded-lg border border-dashed border-border text-muted-foreground transition hover:border-fuchsia-500/60 hover:text-fuchsia-300">
+                      {uploading ? (
+                        <Loader2 className="h-5 w-5 animate-spin" />
+                      ) : (
+                        <ImagePlus className="h-5 w-5" />
+                      )}
+                      <span className="sr-only">إضافة صورة للجزء الجديد</span>
+                      <input
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp"
+                        multiple
+                        className="hidden"
+                        onChange={(e) => {
+                          void uploadImages(e.target.files);
+                          e.currentTarget.value = "";
+                        }}
+                      />
+                    </label>
+                  )}
+                </div>
+                <p className="text-[11px] leading-5 text-muted-foreground">
+                  ارفع صور الجزء الجديد (حتى 3 صور — PNG/JPG/WebP حتى 4 ميجا) وسيحركها
+                  النموذج كجزء جديد يرتبط بالفيديو الأصلي. نسبة الأبعاد والدقة موروثة من
+                  الجزء السابق.
+                </p>
+              </div>
+            ) : (
+              <p className="text-[11px] leading-5 text-muted-foreground">
+                سيُكمل النموذج نفس الفيديو تلقائيًا من نهايته — اكتب فقط وصف الجزء الجديد
+                (حركة الكاميرا، الأحداث…) دون حاجة لرفع صور.
+              </p>
+            )}
+          </div>
+        )}
+
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <Label htmlFor="prompt">
+              {continuing ? "وصف الجزء الجديد" : "وصف المحتوى"}
+            </Label>
+            <span className="text-xs text-muted-foreground" dir="ltr">
+              {prompt.length} / {maxPrompt}
+            </span>
+          </div>
+          <Textarea
+            id="prompt"
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value.slice(0, maxPrompt))}
+            placeholder={placeholder}
+            rows={5}
+            className="resize-none bg-input/40"
+          />
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-2">
+            <Label>نسبة الأبعاد</Label>
+            <Select value={aspect} onValueChange={setAspect}>
+              <SelectTrigger className="w-full" dir="ltr">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {aspectOptions.map((r) => (
+                  <SelectItem key={r} value={r} dir="ltr">
+                    {r}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-2">
+            <Label>الدقة</Label>
+            <Select value={resolution} onValueChange={setResolution}>
+              <SelectTrigger className="w-full" dir="ltr">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {resolutionOptions.map((r) => (
+                  <SelectItem key={r} value={r} dir="ltr">
+                    {r}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+
+        {type === "video" && (
+          <div className="space-y-4 rounded-xl border border-border/70 bg-muted/30 p-4">
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <Label>
+                  {continuing && continueMode === "extend"
+                    ? "مدة الجزء المضاف"
+                    : "مدة الفيديو"}
+                </Label>
+                <span className="text-sm font-bold text-fuchsia-300">
+                  {duration} ثانية
+                </span>
+              </div>
+              <Slider
+                value={[duration]}
+                min={1}
+                max={15}
+                step={1}
+                onValueChange={(v) => setDuration(v[0] ?? 8)}
+                aria-label="مدة الفيديو بالثواني"
+              />
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <div className="space-y-0.5">
+                <Label>الصوت التلقائي</Label>
+                <p className="text-xs text-muted-foreground">
+                  توليد صوت مرافق للفيديو
+                </p>
+              </div>
+              <Switch
+                checked={enableAudio}
+                onCheckedChange={setEnableAudio}
+                aria-label="تشغيل الصوت التلقائي"
+              />
+            </div>
+          </div>
+        )}
+
+        <Button
+          onClick={submit}
+          disabled={submitting || !prompt.trim()}
+          className="h-12 w-full bg-gradient-to-l from-fuchsia-600 to-purple-600 text-base font-extrabold text-white shadow-lg shadow-fuchsia-600/30 hover:from-fuchsia-500 hover:to-purple-500"
+        >
+          {submitting ? (
+            <Loader2 className="h-5 w-5 animate-spin" />
+          ) : continuing ? (
+            <Clapperboard className="h-5 w-5" />
+          ) : (
+            <Sparkles className="h-5 w-5" />
+          )}
+          {submitting
+            ? "جارٍ الإرسال…"
+            : continuing
+              ? "إنشاء الجزء التالي"
+              : "توليد الآن"}
+        </Button>
+
+        <p className="text-center text-[11px] leading-5 text-muted-foreground">
+          النموذج المستخدم:{" "}
+          <span className="font-mono" dir="ltr">
+            {type === "image" ? modelLabels.image : modelLabels.video}
+          </span>
+        </p>
+      </CardContent>
+    </Card>
+  );
+
+  /* منطقة النتيجة والسجل المشتركة */
+  const resultArea = (
+    <div className="space-y-8">
+      <Card className="border-border/70 shadow-xl shadow-black/10">
+        <CardContent className="p-5">
+          {!current ? (
+            <div className="grid place-items-center py-16 text-center">
+              <div className="mb-4 grid h-16 w-16 place-items-center rounded-2xl bg-gradient-to-br from-fuchsia-500/20 to-purple-600/20">
+                <Sparkles className="h-8 w-8 text-fuchsia-300" />
+              </div>
+              <h3 className="text-lg font-bold">ابدأ الإبداع</h3>
+              <p className="mt-1 max-w-xs text-sm text-muted-foreground">
+                اكتب وصفًا في اللوحة الجانبية وستظهر النتيجة هنا مباشرة.
+              </p>
+            </div>
+          ) : current.status === "success" ? (
+            <MediaResult item={current} onCopy={copyUrl} onContinue={startContinue} />
+          ) : current.status === "fail" ? (
+            <div className="space-y-4">
+              <Alert variant="destructive">
+                <AlertTriangle className="h-4 w-4" />
+                <AlertTitle>فشل التوليد</AlertTitle>
+                <AlertDescription>
+                  {current.error ?? "حدث خطأ غير معروف — حاول مرة أخرى."}
+                </AlertDescription>
+              </Alert>
+              <p className="text-sm leading-6 text-muted-foreground">
+                {current.prompt}
+              </p>
+            </div>
+          ) : (
+            <div className="grid place-items-center gap-4 py-14 text-center">
+              <Loader2 className="h-12 w-12 animate-spin text-fuchsia-400" />
+              <div>
+                <p className="font-bold">
+                  {STATUS_LABEL[current.status] ?? current.status}…
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  منقضٍ {elapsed} ثانية — قد يستغرق توليد الفيديو عدة دقائق
+                </p>
+              </div>
+              <div className="h-1.5 w-48 overflow-hidden rounded-full bg-muted">
+                <div className="h-full w-1/3 animate-pulse rounded-full bg-gradient-to-l from-fuchsia-500 to-purple-500" />
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+
+  const historySection = (items: Generation[], emptyText: string) => (
+    <section aria-label="آخر الأعمال">
+      <div className="mb-4 flex items-center justify-between">
+        <h2 className="flex items-center gap-2 text-lg font-extrabold">
+          <Film className="h-5 w-5 text-fuchsia-400" />
+          آخر الأعمال
+        </h2>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={loadHistory}
+          className="gap-1.5 text-muted-foreground"
+        >
+          <RefreshCw className="h-4 w-4" /> تحديث
+        </Button>
+      </div>
+
+      {loadingHistory ? (
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div
+              key={i}
+              className="aspect-square animate-pulse rounded-xl bg-muted/50"
+            />
+          ))}
+        </div>
+      ) : items.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-border/70 p-10 text-center text-sm text-muted-foreground">
+          {emptyText}
+        </div>
+      ) : (
+        <div className="grid max-h-[640px] grid-cols-2 gap-4 overflow-y-auto pe-1 sm:grid-cols-3 lg:grid-cols-4">
+          {items.map((item) => (
+            <HistoryCard
+              key={item.id}
+              item={item}
+              onOpen={openItem}
+              onDelete={deleteItem}
+              onTogglePublish={togglePublish}
+              selectable={type === "video" && item.type === "video"}
+              selected={mergeSel.includes(item.id)}
+              onToggleSelect={toggleMergeSelect}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+
+  /* قسم الفيديوهات المدمجة */
+  const mergesSection = (
+    <section aria-label="الفيديوهات المدمجة">
+      <div className="mb-4 flex items-center justify-between">
+        <h2 className="flex items-center gap-2 text-lg font-extrabold">
+          <Merge className="h-5 w-5 text-fuchsia-400" />
+          الفيديوهات المدمجة
+        </h2>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={loadMerges}
+          className="gap-1.5 text-muted-foreground"
+        >
+          <RefreshCw className="h-4 w-4" /> تحديث
+        </Button>
+      </div>
+
+      {merges.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-border/70 p-8 text-center text-sm text-muted-foreground">
+          لا توجد فيديوهات مدمجة بعد — حدّد مقطعين أو أكثر من الأعمال المكتملة
+          بالأعلى واضغط «دمج في فيديو واحد».
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {merges.map((m) => (
+            <MergeCard
+              key={m.id}
+              job={m}
+              onCopy={copyUrl}
+              onDelete={deleteMergeItem}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+
+  /* شريط الدمج عند وجود تحديد */
+  const mergeBar =
+    mergeSel.length > 0 ? (
+      <div className="mb-5 flex flex-wrap items-center gap-3 rounded-xl border border-fuchsia-500/40 bg-fuchsia-500/10 p-3">
+        <Merge className="h-4 w-4 shrink-0 text-fuchsia-300" />
+        <p className="text-sm font-bold text-fuchsia-200">
+          محدَّد للدمج: {mergeSel.length}{" "}
+          {mergeSel.length < 2 ? "مقطع — حدّد مقطعًا آخر" : "مقاطع"}
+        </p>
+        <Button
+          size="sm"
+          onClick={submitMerge}
+          disabled={merging || mergeSel.length < 2}
+          className="gap-1.5 bg-gradient-to-l from-fuchsia-600 to-purple-600 text-white shadow-md shadow-fuchsia-600/25 hover:from-fuchsia-500 hover:to-purple-500"
+        >
+          {merging ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <Merge className="h-4 w-4" />
+          )}
+          دمج في فيديو واحد
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => setMergeSel([])}
+          className="text-muted-foreground"
+        >
+          إلغاء التحديد
+        </Button>
+      </div>
+    ) : null;
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -472,29 +972,21 @@ export function Studio() {
             className="gap-1.5 border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-300"
           >
             <Sparkles className="h-3.5 w-3.5" />
-            مدعوم بـ kie.ai
+            مدعوم بالذكاء الاصطناعي
           </Badge>
         </div>
       </header>
 
       <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 lg:py-10">
-        <Tabs value={tab} onValueChange={(v) => setTab(v)}>
-          <TabsList className="mx-auto mb-6 grid w-full max-w-3xl grid-cols-3 sm:grid-cols-6">
-            <TabsTrigger value="studio" className="gap-1.5">
+        <Tabs value={tab} onValueChange={handleTabChange}>
+          <TabsList className="mx-auto mb-6 grid w-full max-w-3xl grid-cols-2 sm:grid-cols-4">
+            <TabsTrigger value="images" className="gap-1.5">
               <ImageIcon className="h-4 w-4" />
-              الاستوديو
+              انشاء الصور
             </TabsTrigger>
-            <TabsTrigger value="chat" className="gap-1.5">
-              <Bot className="h-4 w-4" />
-              شات جي بي تي
-            </TabsTrigger>
-            <TabsTrigger value="auto" className="gap-1.5">
-              <Rocket className="h-4 w-4" />
-              النشر التلقائي
-            </TabsTrigger>
-            <TabsTrigger value="gpt-link" className="gap-1.5">
-              <Link2 className="h-4 w-4" />
-              ربط ChatGPT
+            <TabsTrigger value="videos" className="gap-1.5">
+              <Video className="h-4 w-4" />
+              انشاء الفيديوهات
             </TabsTrigger>
             <TabsTrigger value="mcp" className="gap-1.5">
               <Plug className="h-4 w-4" />
@@ -502,363 +994,46 @@ export function Studio() {
             </TabsTrigger>
             <TabsTrigger value="settings" className="gap-1.5">
               <Settings2 className="h-4 w-4" />
-              الإعدادات
+              الاعدادات
             </TabsTrigger>
           </TabsList>
-          <TabsContent value="studio" className="mt-0">
-        <div className="grid items-start gap-6 lg:grid-cols-[400px_minmax(0,1fr)]">
-          {/* لوحة الإنشاء */}
-          <Card className="border-border/70 shadow-xl shadow-black/10 lg:sticky lg:top-24">
-            <CardContent className="space-y-5 p-5">
-              <ToggleGroup
-                type="single"
-                value={type}
-                onValueChange={handleTypeChange}
-                className="grid w-full grid-cols-2 gap-2"
-              >
-                <ToggleGroupItem
-                  value="image"
-                  aria-label="توليد صورة"
-                  className="h-11 gap-2 rounded-xl border border-border data-[state=on]:border-primary data-[state=on]:bg-primary data-[state=on]:text-primary-foreground"
-                >
-                  <ImageIcon className="h-4 w-4" /> صورة
-                </ToggleGroupItem>
-                <ToggleGroupItem
-                  value="video"
-                  aria-label="توليد فيديو"
-                  className="h-11 gap-2 rounded-xl border border-border data-[state=on]:border-primary data-[state=on]:bg-primary data-[state=on]:text-primary-foreground"
-                >
-                  <Video className="h-4 w-4" /> فيديو
-                </ToggleGroupItem>
-              </ToggleGroup>
 
-              {continuing && continueFrom && (
-                <div className="space-y-3 rounded-xl border border-fuchsia-500/40 bg-fuchsia-500/10 p-4">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="flex items-center gap-1.5 text-sm font-extrabold text-fuchsia-300">
-                        <Video className="h-4 w-4 shrink-0" />
-                        تكملة الفيديو — الجزء الجديد سيصبح رقم {nextPartNumber}
-                      </p>
-                      <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
-                        {continueFrom.prompt}
-                      </p>
-                    </div>
-                    <button
-                      onClick={cancelContinue}
-                      aria-label="إلغاء التكملة والرجوع لإنشاء فيديو مستقل"
-                      className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-black/30 text-muted-foreground transition hover:bg-red-600 hover:text-white"
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
-                  </div>
-
-                  <ToggleGroup
-                    type="single"
-                    value={continueMode}
-                    onValueChange={(v) => v && setContinueMode(v as "images" | "extend")}
-                    className="grid w-full grid-cols-2 gap-2"
-                  >
-                    <ToggleGroupItem
-                      value="images"
-                      className="h-9 gap-1.5 rounded-lg border border-border text-xs data-[state=on]:border-primary data-[state=on]:bg-primary data-[state=on]:text-primary-foreground"
-                    >
-                      <ImagePlus className="h-3.5 w-3.5" /> من صور الجزء الجديد
-                    </ToggleGroupItem>
-                    <ToggleGroupItem
-                      value="extend"
-                      className="h-9 gap-1.5 rounded-lg border border-border text-xs data-[state=on]:border-primary data-[state=on]:bg-primary data-[state=on]:text-primary-foreground"
-                    >
-                      <Clapperboard className="h-3.5 w-3.5" /> تكملة تلقائية من النهاية
-                    </ToggleGroupItem>
-                  </ToggleGroup>
-
-                  {continueMode === "images" ? (
-                    <div className="space-y-2">
-                      <div className="flex flex-wrap gap-2">
-                        {uploaded.map((img, i) => (
-                          <div
-                            key={img.url}
-                            className="relative h-16 w-16 overflow-hidden rounded-lg border border-border"
-                          >
-                            <img
-                              src={img.preview}
-                              alt={`صورة الجزء ${i + 1}`}
-                              className="h-full w-full object-cover"
-                            />
-                            <button
-                              onClick={() =>
-                                setUploaded((prev) => prev.filter((x) => x.url !== img.url))
-                              }
-                              aria-label="إزالة الصورة"
-                              className="absolute end-0.5 top-0.5 grid h-5 w-5 place-items-center rounded-md bg-black/60 text-white transition hover:bg-red-600"
-                            >
-                              <X className="h-3 w-3" />
-                            </button>
-                          </div>
-                        ))}
-                        {uploaded.length < 3 && (
-                          <label className="grid h-16 w-16 cursor-pointer place-items-center rounded-lg border border-dashed border-border text-muted-foreground transition hover:border-fuchsia-500/60 hover:text-fuchsia-300">
-                            {uploading ? (
-                              <Loader2 className="h-5 w-5 animate-spin" />
-                            ) : (
-                              <ImagePlus className="h-5 w-5" />
-                            )}
-                            <span className="sr-only">إضافة صورة للجزء الجديد</span>
-                            <input
-                              type="file"
-                              accept="image/png,image/jpeg,image/webp"
-                              multiple
-                              className="hidden"
-                              onChange={(e) => {
-                                void uploadImages(e.target.files);
-                                e.currentTarget.value = "";
-                              }}
-                            />
-                          </label>
-                        )}
-                      </div>
-                      <p className="text-[11px] leading-5 text-muted-foreground">
-                        ارفع صور الجزء الجديد (حتى 3 صور — PNG/JPG/WebP حتى 4 ميجا) وسيحركها
-                        النموذج كجزء جديد يرتبط بالفيديو الأصلي. نسبة الأبعاد والدقة موروثة من
-                        الجزء السابق.
-                      </p>
-                    </div>
-                  ) : (
-                    <p className="text-[11px] leading-5 text-muted-foreground">
-                      سيُكمل النموذج نفس الفيديو تلقائيًا من نهايته — اكتب فقط وصف الجزء الجديد
-                      (حركة الكاميرا، الأحداث…) دون حاجة لرفع صور.
-                    </p>
-                  )}
-                </div>
-              )}
-
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <Label htmlFor="prompt">
-                    {continuing ? "وصف الجزء الجديد" : "وصف المحتوى"}
-                  </Label>
-                  <span className="text-xs text-muted-foreground" dir="ltr">
-                    {prompt.length} / {maxPrompt}
-                  </span>
-                </div>
-                <Textarea
-                  id="prompt"
-                  value={prompt}
-                  onChange={(e) => setPrompt(e.target.value.slice(0, maxPrompt))}
-                  placeholder={placeholder}
-                  rows={5}
-                  className="resize-none bg-input/40"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-2">
-                  <Label>نسبة الأبعاد</Label>
-                  <Select value={aspect} onValueChange={setAspect}>
-                    <SelectTrigger className="w-full" dir="ltr">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {aspectOptions.map((r) => (
-                        <SelectItem key={r} value={r} dir="ltr">
-                          {r}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label>الدقة</Label>
-                  <Select value={resolution} onValueChange={setResolution}>
-                    <SelectTrigger className="w-full" dir="ltr">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {resolutionOptions.map((r) => (
-                        <SelectItem key={r} value={r} dir="ltr">
-                          {r}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-
-              {type === "video" && (
-                <div className="space-y-4 rounded-xl border border-border/70 bg-muted/30 p-4">
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <Label>
-                        {continuing && continueMode === "extend"
-                          ? "مدة الجزء المضاف"
-                          : "مدة الفيديو"}
-                      </Label>
-                      <span className="text-sm font-bold text-fuchsia-300">
-                        {duration} ثانية
-                      </span>
-                    </div>
-                    <Slider
-                      value={[duration]}
-                      min={1}
-                      max={15}
-                      step={1}
-                      onValueChange={(v) => setDuration(v[0] ?? 8)}
-                      aria-label="مدة الفيديو بالثواني"
-                    />
-                  </div>
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="space-y-0.5">
-                      <Label>الصوت التلقائي</Label>
-                      <p className="text-xs text-muted-foreground">
-                        توليد صوت مرافق للفيديو
-                      </p>
-                    </div>
-                    <Switch
-                      checked={enableAudio}
-                      onCheckedChange={setEnableAudio}
-                      aria-label="تشغيل الصوت التلقائي"
-                    />
-                  </div>
-                </div>
-              )}
-
-              <Button
-                onClick={submit}
-                disabled={submitting || !prompt.trim()}
-                className="h-12 w-full bg-gradient-to-l from-fuchsia-600 to-purple-600 text-base font-extrabold text-white shadow-lg shadow-fuchsia-600/30 hover:from-fuchsia-500 hover:to-purple-500"
-              >
-                {submitting ? (
-                  <Loader2 className="h-5 w-5 animate-spin" />
-                ) : continuing ? (
-                  <Clapperboard className="h-5 w-5" />
-                ) : (
-                  <Sparkles className="h-5 w-5" />
+          {/* تبويب انشاء الصور */}
+          <TabsContent value="images" className="mt-0">
+            <div className="grid items-start gap-6 lg:grid-cols-[400px_minmax(0,1fr)]">
+              {createPanel}
+              <div className="space-y-8">
+                {resultArea}
+                {historySection(
+                  imageHistory,
+                  "لا توجد صور بعد — أنشئ أول صورة من اللوحة الجانبية."
                 )}
-                {submitting
-                  ? "جارٍ الإرسال…"
-                  : continuing
-                    ? "إنشاء الجزء التالي"
-                    : "توليد الآن"}
-              </Button>
-
-              <p className="text-center text-[11px] leading-5 text-muted-foreground">
-                النموذج المستخدم:{" "}
-                <span className="font-mono" dir="ltr">
-                  {type === "image" ? modelLabels.image : modelLabels.video}
-                </span>
-              </p>
-            </CardContent>
-          </Card>
-
-          {/* منطقة النتيجة والسجل */}
-          <div className="space-y-8">
-            <Card className="border-border/70 shadow-xl shadow-black/10">
-              <CardContent className="p-5">
-                {!current ? (
-                  <div className="grid place-items-center py-16 text-center">
-                    <div className="mb-4 grid h-16 w-16 place-items-center rounded-2xl bg-gradient-to-br from-fuchsia-500/20 to-purple-600/20">
-                      <Sparkles className="h-8 w-8 text-fuchsia-300" />
-                    </div>
-                    <h3 className="text-lg font-bold">ابدأ الإبداع</h3>
-                    <p className="mt-1 max-w-xs text-sm text-muted-foreground">
-                      اكتب وصفًا في اللوحة الجانبية واختر بين توليد صورة أو فيديو،
-                      وستظهر النتيجة هنا مباشرة.
-                    </p>
-                  </div>
-                ) : current.status === "success" ? (
-                  <MediaResult item={current} onCopy={copyUrl} onContinue={startContinue} />
-                ) : current.status === "fail" ? (
-                  <div className="space-y-4">
-                    <Alert variant="destructive">
-                      <AlertTriangle className="h-4 w-4" />
-                      <AlertTitle>فشل التوليد</AlertTitle>
-                      <AlertDescription>
-                        {current.error ?? "حدث خطأ غير معروف — حاول مرة أخرى."}
-                      </AlertDescription>
-                    </Alert>
-                    <p className="text-sm leading-6 text-muted-foreground">
-                      {current.prompt}
-                    </p>
-                  </div>
-                ) : (
-                  <div className="grid place-items-center gap-4 py-14 text-center">
-                    <Loader2 className="h-12 w-12 animate-spin text-fuchsia-400" />
-                    <div>
-                      <p className="font-bold">
-                        {STATUS_LABEL[current.status] ?? current.status}…
-                      </p>
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        منقضٍ {elapsed} ثانية — قد يستغرق توليد الفيديو عدة دقائق
-                      </p>
-                    </div>
-                    <div className="h-1.5 w-48 overflow-hidden rounded-full bg-muted">
-                      <div className="h-full w-1/3 animate-pulse rounded-full bg-gradient-to-l from-fuchsia-500 to-purple-500" />
-                    </div>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* السجل */}
-            <section aria-label="آخر الأعمال">
-              <div className="mb-4 flex items-center justify-between">
-                <h2 className="flex items-center gap-2 text-lg font-extrabold">
-                  <Clapperboard className="h-5 w-5 text-fuchsia-400" />
-                  آخر الأعمال
-                </h2>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={loadHistory}
-                  className="gap-1.5 text-muted-foreground"
-                >
-                  <RefreshCw className="h-4 w-4" /> تحديث
-                </Button>
               </div>
+            </div>
+          </TabsContent>
 
-              {loadingHistory ? (
-                <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
-                  {Array.from({ length: 4 }).map((_, i) => (
-                    <div
-                      key={i}
-                      className="aspect-square animate-pulse rounded-xl bg-muted/50"
-                    />
-                  ))}
-                </div>
-              ) : history.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-border/70 p-10 text-center text-sm text-muted-foreground">
-                  لا توجد أعمال بعد — أنشئ أول عمل من اللوحة الجانبية.
-                </div>
-              ) : (
-                <div className="grid max-h-[640px] grid-cols-2 gap-4 overflow-y-auto pe-1 sm:grid-cols-3 lg:grid-cols-4">
-                  {history.map((item) => (
-                    <HistoryCard
-                      key={item.id}
-                      item={item}
-                      onOpen={openItem}
-                      onDelete={deleteItem}
-                      onTogglePublish={togglePublish}
-                    />
-                  ))}
-                </div>
-              )}
-            </section>
-          </div>
-        </div>
+          {/* تبويب انشاء الفيديوهات */}
+          <TabsContent value="videos" className="mt-0">
+            <div className="grid items-start gap-6 lg:grid-cols-[400px_minmax(0,1fr)]">
+              {createPanel}
+              <div className="space-y-8">
+                {resultArea}
+                {mergeBar}
+                {historySection(
+                  videoHistory,
+                  "لا توجد فيديوهات بعد — أنشئ أول فيديو من اللوحة الجانبية، وحدّد مقطعين أو أكثر لدمجهم."
+                )}
+                {mergesSection}
+              </div>
+            </div>
           </TabsContent>
-          <TabsContent value="chat" className="mt-0">
-            <ChatPanel onOpenResult={openResultFromChat} />
-          </TabsContent>
-          <TabsContent value="auto" className="mt-0">
-            <AutoPublish />
-          </TabsContent>
-          <TabsContent value="gpt-link" className="mt-0">
-            <GptGuide />
-          </TabsContent>
+
+          {/* تبويب MCP */}
           <TabsContent value="mcp" className="mt-0">
             <McpGuide />
           </TabsContent>
+
+          {/* تبويب الاعدادات */}
           <TabsContent value="settings" className="mt-0">
             <SettingsPanel onSaved={loadModelLabels} />
           </TabsContent>
@@ -869,7 +1044,7 @@ export function Studio() {
         <div className="mx-auto flex w-full max-w-6xl flex-col items-center justify-between gap-2 px-4 text-xs text-muted-foreground sm:flex-row">
           <p>Vi — استوديو توليد الصور والفيديو بالذكاء الاصطناعي</p>
           <p dir="ltr" className="font-mono">
-            Next.js · Turso · kie.ai
+            Next.js · Turso · any AI provider
           </p>
         </div>
       </footer>
@@ -1014,19 +1189,58 @@ function StatusBadge({ status }: { status: GenerationStatus }) {
   );
 }
 
+function MergeStatusBadge({ status }: { status: MergeJob["status"] }) {
+  if (status === "success") {
+    return (
+      <Badge
+        variant="outline"
+        className="border-emerald-500/30 bg-emerald-500/15 text-[10px] text-emerald-300"
+      >
+        اكتمل الدمج
+      </Badge>
+    );
+  }
+  if (status === "fail") {
+    return (
+      <Badge
+        variant="outline"
+        className="border-red-500/30 bg-red-500/15 text-[10px] text-red-300"
+      >
+        فشل الدمج
+      </Badge>
+    );
+  }
+  return (
+    <Badge
+      variant="outline"
+      className="border-fuchsia-500/30 bg-fuchsia-500/15 text-[10px] text-fuchsia-300"
+    >
+      جارٍ الدمج…
+    </Badge>
+  );
+}
+
 function HistoryCard({
   item,
   onOpen,
   onDelete,
   onTogglePublish,
+  selectable,
+  selected,
+  onToggleSelect,
 }: {
   item: Generation;
   onOpen: (g: Generation) => void;
   onDelete: (id: string) => void;
   onTogglePublish: (g: Generation) => void;
+  /** إظهار زر التحديد للدمج (مقاطع فيديو مكتملة في تبويب الفيديوهات) */
+  selectable?: boolean;
+  selected?: boolean;
+  onToggleSelect?: (id: string) => void;
 }) {
   const active = isActiveStatus(item.status);
   const firstUrl = item.resultUrls[0] ?? null;
+  const canSelect = Boolean(selectable && onToggleSelect && item.status === "success" && item.resultUrls.length > 0);
 
   return (
     <div
@@ -1036,7 +1250,11 @@ function HistoryCard({
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") onOpen(item);
       }}
-      className="group relative cursor-pointer overflow-hidden rounded-xl border border-border/70 bg-card transition hover:border-fuchsia-500/50 hover:shadow-lg hover:shadow-fuchsia-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className={`group relative cursor-pointer overflow-hidden rounded-xl border bg-card transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+        selected
+          ? "border-fuchsia-500 shadow-lg shadow-fuchsia-500/20"
+          : "border-border/70 hover:border-fuchsia-500/50 hover:shadow-lg hover:shadow-fuchsia-500/10"
+      }`}
     >
       <div className="relative aspect-square overflow-hidden bg-muted/40">
         {item.status === "success" && firstUrl && item.type === "image" ? (
@@ -1085,8 +1303,29 @@ function HistoryCard({
           )}
         </div>
         <div
-          className="absolute end-2 top-2 flex flex-col gap-1 opacity-0 transition focus-visible:opacity-100 group-hover:opacity-100"
+          className="absolute end-2 top-2 flex flex-col gap-1 transition focus-within:opacity-100 group-hover:opacity-100"
         >
+          {canSelect && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleSelect?.(item.id);
+              }}
+              aria-label={selected ? "إزالة من تحديد الدمج" : "تحديد للدمج"}
+              aria-pressed={selected}
+              className={`grid h-7 w-7 place-items-center rounded-lg text-white transition ${
+                selected
+                  ? "bg-fuchsia-600 text-white"
+                  : "bg-black/50 text-white/80 hover:bg-fuchsia-600/80 hover:text-white"
+              }`}
+            >
+              {selected ? (
+                <Check className="h-3.5 w-3.5" />
+              ) : (
+                <Merge className="h-3.5 w-3.5" />
+              )}
+            </button>
+          )}
           {item.status === "success" && item.resultUrls.length > 0 && (
             <button
               onClick={(e) => {
@@ -1130,5 +1369,85 @@ function HistoryCard({
         </div>
       </div>
     </div>
+  );
+}
+
+/** بطاقة فيديو مدمج — عرض البطاقة في قسم «الفيديوهات المدمجة» */
+function MergeCard({
+  job,
+  onCopy,
+  onDelete,
+}: {
+  job: MergeJob;
+  onCopy: (url: string) => void;
+  onDelete: (id: string) => void;
+}) {
+  return (
+    <Card className="border-border/70 shadow-xl shadow-black/10">
+      <CardContent className="space-y-3 p-5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <MergeStatusBadge status={job.status} />
+            <Badge variant="outline" className="text-[10px]">
+              {job.generationIds.length} مقاطع
+            </Badge>
+            <span className="text-xs text-muted-foreground">
+              {formatDistanceToNow(new Date(job.createdAt), {
+                addSuffix: true,
+                locale: ar,
+              })}
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {job.status === "success" && (
+              <>
+                <a href={job.fileUrl} download target="_blank" rel="noreferrer">
+                  <Button size="sm" className="gap-1.5">
+                    <Download className="h-4 w-4" /> تحميل المدمج
+                  </Button>
+                </a>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  className="gap-1.5"
+                  onClick={() => onCopy(job.fileUrl)}
+                >
+                  <Copy className="h-4 w-4" /> نسخ الرابط
+                </Button>
+              </>
+            )}
+            <button
+              onClick={() => onDelete(job.id)}
+              aria-label="حذف الفيديو المدمج"
+              className="grid h-8 w-8 place-items-center rounded-lg border border-border text-muted-foreground transition hover:border-red-500/60 hover:bg-red-600 hover:text-white"
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+
+        {job.status === "success" ? (
+          <div dir="ltr" className="overflow-hidden rounded-xl border border-border/70 bg-black/40">
+            <video
+              src={job.fileUrl}
+              controls
+              playsInline
+              className="max-h-[60vh] w-full"
+            />
+          </div>
+        ) : job.status === "fail" ? (
+          <Alert variant="destructive">
+            <AlertTriangle className="h-4 w-4" />
+            <AlertTitle>تعذر إكمال الدمج</AlertTitle>
+            <AlertDescription>{job.error ?? "حاول مرة أخرى"}</AlertDescription>
+          </Alert>
+        ) : (
+          <div className="flex items-center justify-center gap-3 rounded-xl border border-border/60 bg-muted/30 py-8 text-sm text-muted-foreground">
+            <Loader2 className="h-5 w-5 animate-spin text-fuchsia-400" />
+            جارٍ دمج المقاطع في مقطع واحد — لحظات ويجهز الملف…
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }

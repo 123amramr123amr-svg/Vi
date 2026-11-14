@@ -15,7 +15,7 @@ import {
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { CopyButton, UrlRow } from "@/components/vi/gpt-guide";
+import { CopyButton, UrlRow } from "@/components/vi/copy-bits";
 
 const useOrigin = () =>
   useSyncExternalStore(
@@ -65,6 +65,11 @@ const TOOLS = [
     icon: Trash2,
     name: "delete_generation",
     desc: "حذف أي عنصر من السجل",
+  },
+  {
+    icon: Clapperboard,
+    name: "merge_videos",
+    desc: "دمج 2-8 فيديوهات مكتملة في مقطع واحد بالترتيب المطلوب عبر ffmpeg",
   },
   {
     icon: Rocket,

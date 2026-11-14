@@ -54,6 +54,21 @@ export interface Generation {
   partNumber: number | null;
 }
 
+/** وظيفة دمج فيديوهات متعددة في مقطع واحد */
+export type MergeStatus = "processing" | "success" | "fail";
+
+export interface MergeJob {
+  id: string;
+  /** معرّفات مقاطع الفيديو بالترتيب المطلوب للدمج */
+  generationIds: string[];
+  status: MergeStatus;
+  error: string | null;
+  /** رابط ملف الفيديو المدمج (داخلي) — يُشتق تلقائيًا */
+  fileUrl: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
 const ACTIVE: readonly GenerationStatus[] = [
   "pending",
   "waiting",

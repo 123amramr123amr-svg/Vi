@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { insertUpload } from "@/lib/turso";
+import { ensureSchema, insertUpload } from "@/lib/turso";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -13,6 +13,7 @@ const MAX_BYTES = 4 * 1024 * 1024; // 4 ميجابايت (ضمن حدود حجم
  * GET /api/uploads/<id> — يستخدمه نموذج الفيديو في وضع image-to-video.
  */
 export async function POST(req: NextRequest) {
+  await ensureSchema();
   let form: FormData;
   try {
     form = await req.formData();

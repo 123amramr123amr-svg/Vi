@@ -84,6 +84,16 @@ def tool_result(resp):
 def main():
     print(f"=== اختبار خادم MCP على {MCP_URL} ===\n")
 
+    # 0) ضبط المزوّد الوهمي المحلي — اختبار كامل بلا أي استدعاء حقيقي ولا استهلاك رصيد
+    mock = os.environ.get("MOCK_URL", "http://127.0.0.1:9091").rstrip("/")
+    st0, _ = http("PUT", f"{BASE}/api/settings", {
+        "baseUrl": f"{mock}/kieapi",
+        "apiKey": "mock-key-123",
+        "imageModel": "kie-mock-image",
+        "videoModel": "kie-mock-video",
+    })
+    ok("ضبط المزوّد الوهمي في الإعدادات") if st0 == 200 else bad("ضبط المزوّد الوهمي", f"status={st0}")
+
     # 1) المصافحة initialize
     status, resp = rpc("initialize", {
         "protocolVersion": "2025-06-18",
@@ -323,6 +333,7 @@ def main():
     ok("OPTIONS /mcp → 204") if opts_status == 204 else bad("OPTIONS /mcp", f"status={opts_status}")
 
     print(f"\n=== النتيجة: {PASS} نجح / {FAIL} فشل ===")
+    http("DELETE", f"{BASE}/api/settings")  # استعادة الافتراضي بعد الاختبار
     sys.exit(1 if FAIL else 0)
 
 

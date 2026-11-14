@@ -5,6 +5,7 @@ import {
   type GenerationParams,
   type GenerationType,
   type GenerationStatus,
+  type MergeJob,
 } from "./types";
 
 /**
@@ -103,6 +104,17 @@ export function ensureSchema(): Promise<void> {
           updated_at INTEGER NOT NULL
         )
       `);
+      // وظائف دمج الفيديوهات (عدة مقاطع → مقطع واحد)
+      await turso.execute(`
+        CREATE TABLE IF NOT EXISTS merges (
+          id TEXT PRIMARY KEY,
+          generation_ids TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'processing',
+          error TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        )
+      `);
     })().catch((err) => {
       schemaPromise = null;
       throw err;
@@ -192,6 +204,7 @@ export async function updateGeneration(
   fields: {
     status?: GenerationStatus;
     taskId?: string | null;
+    model?: string;
     resultUrls?: string[];
     error?: string | null;
     published?: boolean;
@@ -209,6 +222,10 @@ export async function updateGeneration(
   if (fields.taskId !== undefined) {
     sets.push("task_id = ?");
     args.push(fields.taskId);
+  }
+  if (fields.model !== undefined) {
+    sets.push("model = ?");
+    args.push(fields.model);
   }
   if (fields.resultUrls !== undefined) {
     sets.push("result_urls = ?");
@@ -385,5 +402,81 @@ export async function deleteSetting(key: string): Promise<void> {
   await turso.execute({
     sql: "DELETE FROM settings WHERE key = ?",
     args: [key],
+  });
+}
+
+/* ---------- وظائف دمج الفيديوهات ---------- */
+
+function rowToMerge(row: Row): MergeJob {
+  let ids: string[] = [];
+  try {
+    const parsed = JSON.parse((row.generation_ids as string) ?? "[]");
+    if (Array.isArray(parsed)) ids = parsed.filter((x) => typeof x === "string");
+  } catch {
+    ids = [];
+  }
+  return {
+    id: row.id as string,
+    generationIds: ids,
+    status: (row.status as MergeJob["status"]) ?? "processing",
+    error: (row.error as string) || null,
+    fileUrl: `/api/merge/${row.id}/file`,
+    createdAt: Number(row.created_at),
+    updatedAt: Number(row.updated_at),
+  };
+}
+
+export async function insertMerge(m: MergeJob): Promise<void> {
+  await turso.execute({
+    sql: "INSERT INTO merges (id, generation_ids, status, error, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+    args: [m.id, JSON.stringify(m.generationIds), m.status, m.error, m.createdAt, m.updatedAt],
+  });
+}
+
+export async function getMerge(id: string): Promise<MergeJob | null> {
+  const rs = await turso.execute({
+    sql: "SELECT * FROM merges WHERE id = ? LIMIT 1",
+    args: [id],
+  });
+  if (rs.rows.length === 0) return null;
+  return rowToMerge(rs.rows[0] as unknown as Row);
+}
+
+export async function listMerges(limit = 20): Promise<MergeJob[]> {
+  const rs = await turso.execute({
+    sql: "SELECT * FROM merges ORDER BY created_at DESC LIMIT ?",
+    args: [limit],
+  });
+  return rs.rows.map((r) => rowToMerge(r as unknown as Row));
+}
+
+export async function updateMerge(
+  id: string,
+  fields: { status?: MergeJob["status"]; error?: string | null }
+): Promise<void> {
+  const sets: string[] = [];
+  const args: (string | number | null)[] = [];
+  if (fields.status !== undefined) {
+    sets.push("status = ?");
+    args.push(fields.status);
+  }
+  if (fields.error !== undefined) {
+    sets.push("error = ?");
+    args.push(fields.error);
+  }
+  if (sets.length === 0) return;
+  sets.push("updated_at = ?");
+  args.push(Date.now());
+  args.push(id);
+  await turso.execute({
+    sql: `UPDATE merges SET ${sets.join(", ")} WHERE id = ?`,
+    args,
+  });
+}
+
+export async function deleteMerge(id: string): Promise<void> {
+  await turso.execute({
+    sql: "DELETE FROM merges WHERE id = ?",
+    args: [id],
   });
 }

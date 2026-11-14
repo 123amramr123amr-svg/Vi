@@ -9,16 +9,29 @@
  * المفتاح الصحيح: mock-key-123  (أي مفتاح آخر → 401)
  */
 import { createServer } from "node:http";
+import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const PORT = Number(process.argv[2] ?? process.env.MOCK_PORT ?? 9091);
 const KEY = "mock-key-123";
 const VIDEO_BYTES = Buffer.from("MOCK-VIDEO-BYTES-0123456789");
 const IMG_BYTES = Buffer.from("MOCK-IMAGE-BYTES-0123456789");
 
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const ASSETS = path.join(HERE, "assets");
+
+/** ملفات MP4 حقيقية صغيرة (مولّدة بـ ffmpeg) لاختبار دمج الفيديوهات فعليًا */
+function realAsset(name, fallback) {
+  const p = path.join(ASSETS, name);
+  return existsSync(p) ? readFileSync(p) : fallback;
+}
+
 const state = {
   videoCreates: 0,
   videoPolls: new Map(),
   jobs: new Map(),
+  jobsAsset: new Map(),
   jobSeq: 0,
 };
 
@@ -70,9 +83,11 @@ const server = createServer(async (req, res) => {
 
   /* ---------- أصول ثابتة ---------- */
   if (p === "/assets/image.png")
-    return sendBytes(res, 200, IMG_BYTES, "image/png");
-  if (p === "/assets/video.mp4")
-    return sendBytes(res, 200, VIDEO_BYTES, "video/mp4");
+    return sendBytes(res, 200, realAsset("mock-image.png", IMG_BYTES), "image/png");
+  if (p === "/assets/video.mp4" || p === "/assets/part1.mp4")
+    return sendBytes(res, 200, realAsset("mock-part1.mp4", VIDEO_BYTES), "video/mp4");
+  if (p === "/assets/part2.mp4")
+    return sendBytes(res, 200, realAsset("mock-part2.mp4", VIDEO_BYTES), "video/mp4");
 
   /* ---------- جبل نمط OpenAI: /oai/v1 ---------- */
   if (p === "/oai/v1/models") {
@@ -161,9 +176,15 @@ const server = createServer(async (req, res) => {
     const body = await readBody(req);
     if (!body.model || typeof body.input !== "object")
       return sendJson(res, 400, { code: 400, msg: "model and input required" });
+    /* محاكاة نموذج معطل لدى المزوّد — لاختبار سلسلة النماذج البديلة */
+    if (body.model === "broken-video-model")
+      return sendJson(res, 200, { code: 500, msg: "Internal error" });
     state.jobSeq += 1;
     const taskId = `job_${state.jobSeq}`;
     state.jobs.set(taskId, 0);
+    /* مهام image-to-video تعيد مقطعًا مختلفًا قليلًا (الجزء 2) لتمييز الدمج */
+    const hasImages = Array.isArray(body.input?.image_urls) && body.input.image_urls.length > 0;
+    state.jobsAsset.set(taskId, hasImages ? "/assets/part2.mp4" : "/assets/video.mp4");
     return sendJson(res, 200, {
       code: 200,
       msg: "success",
@@ -182,13 +203,14 @@ const server = createServer(async (req, res) => {
       return sendJson(res, 200, { code: 200, data: { taskId, state: "waiting" } });
     if (n === 2)
       return sendJson(res, 200, { code: 200, data: { taskId, state: "generating" } });
+    const asset = state.jobsAsset.get(taskId) ?? "/assets/video.mp4";
     return sendJson(res, 200, {
       code: 200,
       data: {
         taskId,
         state: "success",
         resultJson: JSON.stringify({
-          resultUrls: [`http://127.0.0.1:${PORT}/assets/video.mp4`],
+          resultUrls: [`http://127.0.0.1:${PORT}${asset}`],
         }),
       },
     });

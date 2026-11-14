@@ -1,4 +1,9 @@
-import { createGenerationTask, type ProviderSnapshot } from "@/lib/provider";
+import {
+  CreateTaskError,
+  createGenerationTask,
+  ProviderAuthError,
+  type ProviderSnapshot,
+} from "@/lib/provider";
 import { getProviderSettings } from "@/lib/settings";
 import {
   ensureSchema,
@@ -15,6 +20,20 @@ import type { Generation } from "@/lib/types";
 
 /** نموذج تكملة الفيديو الرسمي من kie.ai (Grok Imagine - Video Extend) */
 const EXTEND_MODEL = process.env.KIE_EXTEND_MODEL ?? "grok-imagine/extend";
+
+/**
+ * نماذج فيديو بديلة تُجرَّب تلقائيًا عند فشل النموذج المضبوط بخطأ من
+ * المزوّد نفسه (مثل Internal error) بينما واجهة المهام حية — هذا يحل
+ * مشكلة «خطأ داخلي يمنع إنشاء الفيديوهات» عندما يكون نموذج معين معطلًا.
+ */
+const VIDEO_TEXT_FALLBACKS = [
+  "grok-imagine/text-to-video",
+  "grok-imagine-video-1-5-preview",
+];
+const VIDEO_IMAGE_FALLBACKS = [
+  "grok-imagine/image-to-video",
+  "grok-imagine-video-1-5-preview",
+];
 
 /** خطأ في طلب إنشاء التوليد (يرد للعميل كـ 400 وليس 502) */
 export class GenerationRequestError extends Error {}
@@ -149,6 +168,14 @@ export async function startGeneration(
         ...(imgs.length > 0 ? { imageUrl: imgs[0] } : {}),
       };
 
+  /* سلسلة النماذج المرشّحة: النموذج المضبوط أولًا ثم البدائل للفيديو فقط */
+  const candidates = [model];
+  if (opts.type === "video" && !(opts.extend && parent)) {
+    for (const fb of imgs.length > 0 ? VIDEO_IMAGE_FALLBACKS : VIDEO_TEXT_FALLBACKS) {
+      if (fb !== model && !candidates.includes(fb)) candidates.push(fb);
+    }
+  }
+
   const now = Date.now();
   const gen: Generation = {
     id: crypto.randomUUID(),
@@ -185,63 +212,87 @@ export async function startGeneration(
 
   await insertGeneration(gen);
   try {
-    /* إنشاء المهمة: واجهة المهام (نمط kie) أولًا ثم المتوافق مع OpenAI */
-    const created = await createGenerationTask({
-      type: opts.type,
-      model,
-      input,
-      prompt: opts.prompt,
-      cfg: { baseUrl: settings.baseUrl, apiKey: settings.apiKey },
-      jobsOnly: Boolean(opts.extend && parent),
-      ...(opts.type === "image" ? { openaiImageSize } : { openaiVideo: openaiVideoSpec }),
-    });
+    /* إنشاء المهمة: واجهة المهام (نمط kie) أولًا ثم المتوافق مع OpenAI —
+       وعند فشل نموذج الفيديو من المزوّد نفسه تُجرَّب النماذج البديلة تلقائيًا */
+    let lastError: unknown = null;
+    for (let ci = 0; ci < candidates.length; ci++) {
+      const candidate = candidates[ci]!;
+      try {
+        const created = await createGenerationTask({
+          type: opts.type,
+          model: candidate,
+          input,
+          prompt: opts.prompt,
+          cfg: { baseUrl: settings.baseUrl, apiKey: settings.apiKey },
+          jobsOnly: Boolean(opts.extend && parent),
+          ...(opts.type === "image" ? { openaiImageSize } : { openaiVideo: openaiVideoSpec }),
+        });
 
-    /* لقطة المزوّد تُحفظ مع المهمة حتى يستعلام الاستمرار لدى نفس المزوّد الذي أُنشئت به */
-    const snapshot: ProviderSnapshot = {
-      kind: created.kind,
-      baseUrl: settings.baseUrl,
-      prefix: created.prefix,
-    };
-    const finalParams = { ...gen.params, provider: snapshot };
+        /* لقطة المزوّد تُحفظ مع المهمة حتى يستعلام الاستمرار لدى نفس المزوّد الذي أُنشئت به */
+        const snapshot: ProviderSnapshot = {
+          kind: created.kind,
+          baseUrl: settings.baseUrl,
+          prefix: created.prefix,
+        };
+        const finalParams = { ...gen.params, provider: snapshot };
 
-    if (created.immediateUrls.length > 0) {
-      // واجهة متزامنة (مثل /images/generations) — النتيجة جاهزة فورًا
-      await updateGeneration(gen.id, {
-        taskId: created.taskId,
-        status: "success",
-        resultUrls: created.immediateUrls,
-        params: finalParams,
-      });
-      return {
-        ...gen,
-        taskId: created.taskId,
-        status: "success",
-        resultUrls: created.immediateUrls,
-        params: finalParams,
-        updatedAt: Date.now(),
-      };
+        if (created.immediateUrls.length > 0) {
+          // واجهة متزامنة (مثل /images/generations) — النتيجة جاهزة فورًا
+          await updateGeneration(gen.id, {
+            model: candidate,
+            taskId: created.taskId,
+            status: "success",
+            resultUrls: created.immediateUrls,
+            params: finalParams,
+          });
+          return {
+            ...gen,
+            model: candidate,
+            taskId: created.taskId,
+            status: "success",
+            resultUrls: created.immediateUrls,
+            params: finalParams,
+            updatedAt: Date.now(),
+          };
+        }
+
+        if (!created.taskId) {
+          throw new Error("لم يُرجع المزوّد معرّف المهمة");
+        }
+        await updateGeneration(gen.id, {
+          model: candidate,
+          taskId: created.taskId,
+          status: "waiting",
+          params: finalParams,
+        });
+        return {
+          ...gen,
+          model: candidate,
+          taskId: created.taskId,
+          status: "waiting",
+          params: finalParams,
+          updatedAt: Date.now(),
+        };
+      } catch (err) {
+        /* مفتاح مرفوض = لا فائدة من تجربة نموذج آخر بنفس المفتاح */
+        if (err instanceof ProviderAuthError) throw err;
+        lastError = err;
+        const live = err instanceof CreateTaskError && err.jobsEndpointLive;
+        /* نجرّب النموذج البديل فقط عندما واجهة المزوّد حية وفشل هو النموذج نفسه */
+        if (!live || ci >= candidates.length - 1) throw err;
+        console.warn(
+          `[generate] فشل النموذج "${candidate}" عند المزوّد — جارٍ تجربة البديل "${candidates[ci + 1]}"`,
+          err instanceof Error ? err.message : err
+        );
+      }
     }
-
-    if (!created.taskId) {
-      throw new Error("لم يُرجع المزوّد معرّف المهمة");
-    }
-    await updateGeneration(gen.id, {
-      taskId: created.taskId,
-      status: "waiting",
-      params: finalParams,
-    });
-    return {
-      ...gen,
-      taskId: created.taskId,
-      status: "waiting",
-      params: finalParams,
-      updatedAt: Date.now(),
-    };
+    throw lastError ?? new Error("تعذر إنشاء مهمة التوليد عند المزوّد");
   } catch (err) {
-    const message =
+    const raw =
       err instanceof Error
         ? err.message
         : "تعذر إنشاء مهمة التوليد عند المزوّد";
+    const message = withProviderHint(raw);
     try {
       await updateGeneration(gen.id, { status: "fail", error: message });
     } catch {
@@ -249,6 +300,29 @@ export async function startGeneration(
     }
     throw new Error(message);
   }
+}
+
+/**
+ * تصنيف رسالة فشل المزوّد وإضافة توصية عملية بالعربية — بدل رسالة
+ * «خطأ داخلي» بلا سياق يفهم منها المستخدم ما الذي يجب فعله.
+ */
+function withProviderHint(message: string): string {
+  const s = message.toLowerCase();
+  let hint: string | null = null;
+  if (/insufficient|credit|balance|quota|billing/.test(s)) {
+    hint =
+      "الرصيد لدى المزوّد غير كافٍ — اشحن الحساب أو استخدم مفتاحًا آخر من تبويب الإعدادات.";
+  } else if (/invalid api key|unauthorized|forbidden|authentication/.test(s)) {
+    hint =
+      "المفتاح مرفوض من المزوّد — تأكد من لصق المفتاح الصحيح في تبويب الإعدادات ثم اضغط «اختبار الاتصال».";
+  } else if (/internal/.test(s)) {
+    hint =
+      "المزوّد أرجع خطأً داخليًا (عطلًا مؤقتًا أو نموذجًا معطلًا) — جُرّبت نماذج بديلة تلقائيًا؛ إن تكرر الخطأ اختر نموذجًا آخر من تبويب الإعدادات أو حاول لاحقًا.";
+  } else if (/model/.test(s)) {
+    hint =
+      "قد يكون معرّف النموذج غير صحيح أو غير مدعوم — اختر النموذج من قائمة «جلب النماذج» في تبويب الإعدادات.";
+  }
+  return hint ? `${message}\n💡 ${hint}` : message;
 }
 
 /* ------- مقاسات الواجهة المتوافقة مع OpenAI ------- */

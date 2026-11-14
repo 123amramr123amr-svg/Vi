@@ -1,10 +1,13 @@
 import { z } from "zod";
 import { runAutopilotStep } from "@/lib/autopilot-runner";
+import { runMergeJob } from "@/lib/merge";
 import { waitForGeneration } from "@/lib/poll";
+import { createMergeJob } from "@/lib/merge-service";
 import { startGeneration } from "@/lib/tasks";
 import {
   deleteGeneration,
   getGeneration,
+  getMerge,
   listGenerations,
   listPublished,
   updateGeneration,
@@ -15,6 +18,7 @@ import {
   VIDEO_ASPECT_RATIOS,
   VIDEO_RESOLUTIONS,
   type Generation,
+  type MergeJob,
 } from "@/lib/types";
 import { ToolDefinitionError, type ToolCallResult } from "./types";
 
@@ -186,6 +190,17 @@ const deleteArgs = z.object({
   id: z.string().min(1).describe("Generation id to delete from the history."),
 });
 
+const mergeArgs = z.object({
+  ids: z
+    .array(z.string().min(1))
+    .min(2)
+    .max(8)
+    .describe(
+      "Generation ids of 2-8 SUCCESSFUL video generations, in the exact order they should appear in the merged clip. Each must be a completed video (status=success)."
+    ),
+  ...waitSecondsArgs,
+});
+
 const autopilotArgs = z.object({
   create: z
     .boolean()
@@ -266,6 +281,13 @@ export function getToolDefs(): Array<Record<string, unknown>> {
       inputSchema: schemaOf(deleteArgs),
     },
     {
+      name: "merge_videos",
+      title: "Merge multiple videos into one",
+      description:
+        "Concatenate 2-8 successfully completed video generations (in the given order) into a single MP4 file via ffmpeg. Returns the merged file URL; poll get result with wait_seconds>0 or fetch the returned file URL once status=success.",
+      inputSchema: schemaOf(mergeArgs),
+    },
+    {
       name: "run_autopilot",
       title: "Run autopilot step",
       description:
@@ -321,6 +343,11 @@ function absolutize(url: string): string {
   return `${resultOrigin}${url}`;
 }
 
+/** أصل الطلب الحالي إن ضُبط — يُستخدم لتحويل روابط /api/media و /api/merge لمطلقة */
+export function getResultOrigin(): string | null {
+  return resultOrigin;
+}
+
 function serializeGeneration(row: Generation): Record<string, unknown> {
   return {
     id: row.id,
@@ -343,6 +370,23 @@ function serializeGeneration(row: Generation): Record<string, unknown> {
 
 function withMessage(row: Generation, message: string): Record<string, unknown> {
   return { ...serializeGeneration(row), message };
+}
+
+/** رد أداة merge_videos وفق حالة وظيفة الدمج */
+function mergeResult(job: MergeJob): ToolCallResult {
+  return toolText({
+    id: job.id,
+    status: job.status,
+    error: job.error,
+    generationIds: job.generationIds,
+    fileUrl: absolutize(job.fileUrl),
+    message:
+      job.status === "success"
+        ? "Videos merged successfully — the single merged MP4 is downloadable at fileUrl."
+        : job.status === "fail"
+          ? `Merge failed: ${job.error ?? "unknown error"}`
+          : "Merging is in progress (ffmpeg). Call merge_videos again in ~20-40 seconds or GET /api/merge/{id} until status=success.",
+  });
 }
 
 function generationMessage(row: Generation): Record<string, unknown> {
@@ -503,6 +547,36 @@ export async function callTool(
         deleted: args.id,
         message: "Generation deleted from the history.",
       });
+    }
+
+    case "merge_videos": {
+      const args = parseArgs(mergeArgs, rawArgs);
+      const ids = [...new Set(args.ids)];
+      if (ids.length < 2) {
+        throw new ToolDefinitionError(
+          "Invalid arguments for tool — at least 2 different video ids are required."
+        );
+      }
+      for (const gid of ids) {
+        const row = await getGeneration(gid);
+        if (!row) {
+          throw new ToolDefinitionError(`Video generation not found: ${gid}`);
+        }
+        if (row.type !== "video" || row.status !== "success" || row.resultUrls.length === 0) {
+          throw new ToolDefinitionError(
+            `Generation ${gid} is not a completed video — merge requires successful video generations (poll get_generation first).`
+          );
+        }
+      }
+      const job = await createMergeJob(ids, getResultOrigin() ?? "");
+      if (args.wait_seconds > 0) {
+        /* بناء فوري داخل الطلب — after() يبدأ فقط بعد إرسال الرد فلا يفيد الانتظار */
+        await runMergeJob(job, getResultOrigin() ?? "");
+        const built = await getMerge(job.id);
+        if (built && built.status !== "processing") return mergeResult(built);
+      }
+      const current = await getMerge(job.id);
+      return mergeResult(current ?? job);
     }
 
     case "run_autopilot": {

@@ -125,6 +125,23 @@ export function providerHeaders(apiKey: string): Record<string, string> {
 /** خطأ تصديق (مفتاح مرفوض) — يوقف تجربة بقية المرشّحات فورًا */
 export class ProviderAuthError extends Error {}
 
+/**
+ * خطأ إنشاء مهمة لدى المزوّد — يحمل تفاصيل كل المحاولات
+ * وما إذا كانت واجهة المهام (نمط kie) موجودة فعلًا لدى المزوّد،
+ * ليقرر المتصل إن كان يستحق تجربة نماذج بديلة.
+ */
+export class CreateTaskError extends Error {
+  constructor(
+    message: string,
+    /** تفاصيل كل محاولة: "endpoint: msg" */
+    public attempts: string[],
+    /** true إذا ردّت واجهة createTask (نمط kie) بـ JSON وليس 404 — أي أن الواجهة حية والمشكلة في النموذج/الطلب */
+    public jobsEndpointLive: boolean
+  ) {
+    super(message);
+  }
+}
+
 async function errMsg(res: Response): Promise<string> {
   const json = (await res.json().catch(() => null)) as unknown;
   if (json && typeof json === "object") {
@@ -302,8 +319,10 @@ export async function createGenerationTask(
   }
 
   if (args.jobsOnly) {
-    throw new Error(
-      `تعذر إنشاء مهمة التكملة لدى المزوّد (تتطلب واجهة المهام نمط kie) — ${tried.slice(0, 3).join(" | ")}`
+    throw new CreateTaskError(
+      `تعذر إنشاء مهمة التكملة لدى المزوّد (تتطلب واجهة المهام نمط kie) — ${tried.slice(0, 3).join(" | ")}`,
+      tried,
+      tried.some((t) => t.includes("/jobs/createTask") && !isConnectionFailure(t))
     );
   }
 
@@ -409,8 +428,23 @@ export async function createGenerationTask(
     }
   }
 
-  throw new Error(
-    `تعذر إنشاء مهمة التوليد لدى المزوّد (${args.cfg.baseUrl}) — ${tried.slice(0, 4).join(" | ")}`
+  throw new CreateTaskError(
+    `تعذر إنشاء مهمة التوليد لدى المزوّد (${args.cfg.baseUrl}) — ${tried.slice(0, 4).join(" | ")}`,
+    tried,
+    tried.some(
+      (t) => t.includes("/jobs/createTask") && !isConnectionFailure(t)
+    )
+  );
+}
+
+/** هل كانت المحاولة فشل اتصال/مسار (404/405/شبكة) وليس ردًا حقيقيًا من واجهة حية؟ */
+function isConnectionFailure(attempt: string): boolean {
+  return (
+    attempt.includes("HTTP 404") ||
+    attempt.includes("HTTP 405") ||
+    attempt.includes("فشل الاتصال") ||
+    attempt.includes("TimeoutError") ||
+    attempt.includes("fetch failed")
   );
 }
 

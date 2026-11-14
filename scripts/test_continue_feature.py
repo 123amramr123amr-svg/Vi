@@ -117,7 +117,7 @@ check("MCP initialize", s == 200 and bool(init.get("result", {}).get("protocolVe
 s, tl = req("/mcp", "POST", {"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
 tools = tl.get("result", {}).get("tools", [])
 names = [t["name"] for t in tools]
-check("MCP أدوات = 9 وتحوي continue_video", "continue_video" in names and len(names) == 9, str(names))
+check("MCP أدوات = 10 وتحوي continue_video وmerge_videos", "continue_video" in names and "merge_videos" in names and len(names) == 10, str(names))
 cv_tool = next((t for t in tools if t["name"] == "continue_video"), {})
 props = cv_tool.get("inputSchema", {}).get("properties", {})
 check("مخطط continue_video يحوي mode/image_urls/duration",

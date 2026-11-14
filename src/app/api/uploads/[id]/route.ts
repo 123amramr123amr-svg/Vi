@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getUpload } from "@/lib/turso";
+import { ensureSchema, getUpload } from "@/lib/turso";
 
 export const dynamic = "force-dynamic";
 
@@ -8,6 +8,7 @@ export async function GET(
   _req: NextRequest,
   ctx: { params: Promise<{ id: string }> }
 ) {
+  await ensureSchema();
   const { id } = await ctx.params;
   try {
     const up = await getUpload(id);

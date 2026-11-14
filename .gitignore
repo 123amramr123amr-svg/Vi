@@ -31,3 +31,4 @@ skills/
 # build artifacts
 tsconfig.tsbuildinfo
 *.tsbuildinfo
+*.log

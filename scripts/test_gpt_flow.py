@@ -1,5 +1,5 @@
 """محاكاة تدفق ChatGPT Actions كاملًا على تطبيق Vi:
-1) التحقق من مخطط /api/openapi.json
+1) التحقق من مخطط /api/openapi.json (8 عمليات)
 2) صفحة /privacy
 3) listGenerations
 4) createGeneration (صورة)
@@ -8,10 +8,12 @@
 7) deleteGeneration للتنظيف
 """
 import json
+import os
 import time
 import urllib.request
 
 BASE = "http://localhost:3000"
+MOCK = os.environ.get("MOCK_URL", "http://127.0.0.1:9091").rstrip("/")
 
 
 def req(method, path, body=None, timeout=90):
@@ -31,6 +33,19 @@ def get_html(path, timeout=30):
         return res.status, res.read().decode()
 
 
+# ضبط المزوّد الوهمي المحلي — اختبار كامل بلا أي استدعاء حقيقي ولا استهلاك رصيد
+req(
+    "PUT",
+    "/api/settings",
+    {
+        "baseUrl": f"{MOCK}/kieapi",
+        "apiKey": "mock-key-123",
+        "imageModel": "kie-mock-image",
+        "videoModel": "kie-mock-video",
+    },
+)
+print("0) MOCK PROVIDER SETTINGS OK")
+
 # 1) مخطط OpenAPI
 st, schema = req("GET", "/api/openapi.json")
 ops = []
@@ -40,12 +55,16 @@ for path_item in schema["paths"].values():
             ops.append(op["operationId"])
 assert schema["openapi"] == "3.1.0", schema["openapi"]
 assert schema["servers"][0]["url"].startswith("http"), schema["servers"]
-assert len(ops) == len(set(ops)) == 4, ops
+assert len(ops) == len(set(ops)) == 8, ops
 assert set(ops) == {
     "createGeneration",
     "getGeneration",
     "listGenerations",
     "deleteGeneration",
+    "publishGeneration",
+    "unpublishGeneration",
+    "listPublishedWorks",
+    "runAutopilot",
 }, ops
 print("1) SCHEMA OK — server:", schema["servers"][0]["url"], "ops:", sorted(ops))
 
@@ -103,5 +122,8 @@ assert d.get("ok") is True
 st, listing2 = req("GET", "/api/generations")
 assert gid not in [i["id"] for i in listing2["items"]]
 print("7) DELETE OK — test row removed")
+
+# استعادة الإعدادات الافتراضية بعد الاختبار
+req("DELETE", "/api/settings")
 
 print("ALL GPT-FLOW TESTS PASSED ✅")

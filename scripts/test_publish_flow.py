@@ -10,10 +10,12 @@
 9) تنظيف: حذف كل صفوف الاختبار
 """
 import json
+import os
 import time
 import urllib.request
 
 BASE = "http://localhost:3000"
+MOCK = os.environ.get("MOCK_URL", "http://127.0.0.1:9091").rstrip("/")
 
 
 def req(method, path, body=None, timeout=90):
@@ -43,6 +45,19 @@ def wait_success(gid, max_seconds=180):
             return item
     raise AssertionError("timeout waiting for generation")
 
+
+# ضبط المزوّد الوهمي المحلي — اختبار كامل بلا أي استدعاء حقيقي ولا استهلاك رصيد
+req(
+    "PUT",
+    "/api/settings",
+    {
+        "baseUrl": f"{MOCK}/kieapi",
+        "apiKey": "mock-key-123",
+        "imageModel": "kie-mock-image",
+        "videoModel": "kie-mock-video",
+    },
+)
+print("0) MOCK PROVIDER SETTINGS OK")
 
 # 1) مخطط به 8 عمليات
 st, schema = req("GET", "/api/openapi.json")
@@ -115,6 +130,7 @@ print("8) GALLERY PAGE OK — contains published work")
 # 9) تنظيف
 req("DELETE", f"/api/generations/{gid}/publish")
 req("DELETE", f"/api/generations/{gid}")
+req("DELETE", "/api/settings")  # استعادة الافتراضي بعد الاختبار
 st, pub = req("GET", "/api/published")
 assert not any(i["id"] == gid for i in pub["items"])
 print("9) CLEANUP OK")

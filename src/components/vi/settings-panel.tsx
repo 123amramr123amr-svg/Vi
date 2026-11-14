@@ -13,6 +13,7 @@ import {
   RotateCcw,
   Save,
   Search,
+  ShieldCheck,
   Sparkles,
   Video,
 } from "lucide-react";
@@ -224,6 +225,12 @@ export function SettingsPanel({ onSaved }: { onSaved?: () => void }) {
   const [fetchNote, setFetchNote] = useState<string | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
 
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{
+    ok: boolean;
+    message: string;
+  } | null>(null);
+
   const [imageModel, setImageModel] = useState("");
   const [videoModel, setVideoModel] = useState("");
 
@@ -318,6 +325,42 @@ export function SettingsPanel({ onSaved }: { onSaved?: () => void }) {
     }
   }
 
+  /** فحص اتصال بالمزوّد بدون أي استهلاك للرصيد — يكشف المفتاح المرفوض فورًا */
+  async function testConnection() {
+    if (testing) return;
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const res = await fetch("/api/settings/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...(baseUrlDraft.trim() ? { baseUrl: baseUrlDraft.trim() } : {}),
+          ...(apiKeyDraft.trim() ? { apiKey: apiKeyDraft.trim() } : {}),
+        }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        error?: string;
+        note?: string;
+      };
+      if (!res.ok) {
+        setTestResult({ ok: false, message: data.error ?? "تعذر اختبار الاتصال" });
+      } else if (data.ok) {
+        setTestResult({ ok: true, message: data.note ?? "الاتصال ناجح والمفتاح مقبول من المزوّد" });
+      } else {
+        setTestResult({ ok: false, message: data.error ?? "المزوّد لا يستجيب" });
+      }
+    } catch (err) {
+      setTestResult({
+        ok: false,
+        message: err instanceof Error ? err.message : "تعذر اختبار الاتصال",
+      });
+    } finally {
+      setTesting(false);
+    }
+  }
+
   async function save() {
     if (saving) return;
     if (!imageModel.trim() || !videoModel.trim()) {
@@ -355,7 +398,7 @@ export function SettingsPanel({ onSaved }: { onSaved?: () => void }) {
       toast({
         title: "حُفظت الإعدادات ✅",
         description:
-          "تُطبَّق فورًا على كل مهمة جديدة: الاستوديو، المحادثة، ChatGPT، MCP، والأوتوبايلوت",
+          "تُطبَّق فورًا على كل مهمة جديدة: انشاء الصور، انشاء الفيديوهات، وMCP",
       });
       onSaved?.();
     } catch (err) {
@@ -454,8 +497,8 @@ export function SettingsPanel({ onSaved }: { onSaved?: () => void }) {
             )}
           </CardTitle>
           <p className="text-sm leading-6 text-muted-foreground">
-            هذه القيم تُستخدم الآن في كل عمليات التوليد (الاستوديو، المحادثة،
-            شات جي بي تي، MCP، والأوتوبايلوت). لتغييرها استخدم البطاقة التالية.
+            هذه القيم تُستخدم الآن في كل عمليات التوليد (انشاء الصور، انشاء
+            الفيديوهات، وMCP). لتغييرها استخدم البطاقة التالية.
           </p>
         </CardHeader>
         <CardContent>
@@ -587,19 +630,55 @@ export function SettingsPanel({ onSaved }: { onSaved?: () => void }) {
             </p>
           </div>
 
-          <Button
-            type="button"
-            onClick={fetchModels}
-            disabled={fetching}
-            className="w-full gap-2 bg-gradient-to-l from-fuchsia-600 to-purple-600 text-white hover:from-fuchsia-500 hover:to-purple-500"
-          >
-            {fetching ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <RefreshCw className="h-4 w-4" />
-            )}
-            جلب النماذج المرتبطة بالمفتاح
-          </Button>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <Button
+              type="button"
+              onClick={fetchModels}
+              disabled={fetching}
+              className="flex-1 gap-2 bg-gradient-to-l from-fuchsia-600 to-purple-600 text-white hover:from-fuchsia-500 hover:to-purple-500"
+            >
+              {fetching ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCw className="h-4 w-4" />
+              )}
+              جلب النماذج المرتبطة بالمفتاح
+            </Button>
+            <Button
+              type="button"
+              onClick={testConnection}
+              disabled={testing}
+              variant="outline"
+              className="gap-2 sm:w-auto"
+            >
+              {testing ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <ShieldCheck className="h-4 w-4" />
+              )}
+              اختبار الاتصال
+            </Button>
+          </div>
+
+          {testResult && (
+            <Alert
+              className={
+                testResult.ok
+                  ? "border-emerald-500/30 bg-emerald-500/10"
+                  : "border-red-500/30 bg-red-500/10"
+              }
+            >
+              {testResult.ok ? (
+                <Check className="h-4 w-4 text-emerald-400" />
+              ) : (
+                <AlertTriangle className="h-4 w-4 text-red-400" />
+              )}
+              <AlertTitle className={testResult.ok ? "text-emerald-300" : "text-red-300"}>
+                {testResult.ok ? "الاتصال ناجح" : "فشل الاتصال"}
+              </AlertTitle>
+              <AlertDescription>{testResult.message}</AlertDescription>
+            </Alert>
+          )}
 
           {fetchNote && (
             <Alert className="border-emerald-500/30 bg-emerald-500/10">
